@@ -14,6 +14,7 @@ mkdir -p "$SRC" "$STATE" "$TPL"
 
 echo "==> 拷贝源码"
 cp -r "$HERE"/app "$HERE"/web "$HERE"/Dockerfile "$HERE"/requirements.txt "$SRC"/
+cp "$HERE"/fix-mirror.sh "$SRC"/ 2>/dev/null || true
 cp "$HERE"/docker-compose.yml "$SRC"/ 2>/dev/null || true
 
 echo "==> 安装 Unraid 容器模板"
@@ -22,7 +23,21 @@ if [ -f "$HERE/unraid/my-uproxy.xml" ]; then
 fi
 
 echo "==> 构建镜像"
-docker build -t uproxy:latest "$SRC"
+# 基础镜像拉不动是本脚本最常见的失败点：daemon.json 里的 registry-mirror 已失效，
+# 表现为 lookup <域名>: no such host。给出明确指引，别让用户对着 docker 报错猜。
+if ! docker build -t uproxy:latest "$SRC"; then
+  echo
+  echo "!! 构建失败。"
+  echo "   最常见原因：daemon.json 里配的镜像源域名已失效，基础镜像拉不下来。"
+  echo "   （报错形如 lookup xxx on 223.5.5.5:53: no such host）"
+  echo
+  echo "   修一下镜像源再重跑："
+  echo "     bash $(dirname "$0")/fix-mirror.sh"
+  echo "     ./install.sh"
+  echo
+  echo "   若一条公共镜像源都不通，改用代理出口：给 dockerd 配 http_proxy 后重试。"
+  exit 1
+fi
 
 echo "==> 生成访问口令"
 if [ -z "${UPX_TOKEN:-}" ]; then
