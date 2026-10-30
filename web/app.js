@@ -13,16 +13,59 @@ function toast(msg) {
   toastTimer = setTimeout(() => el.classList.remove("on"), 3000);
 }
 
-async function api(path, method = "GET", body) {
-  const opt = { method, headers: {} };
-  if (body !== undefined) {
-    opt.headers["Content-Type"] = "application/json";
-    opt.body = JSON.stringify(body);
+/* ---------------- 访问口令（对应后端 UPX_TOKEN） ----------------
+   后端所有 /api/* 都校验口令，不带就返回 401「未授权」。
+   口令来源优先级：URL 的 ?token= > localStorage > 手动输入。
+   用户用 http://<IP>:8765/?token=xxxx 打开即可自动填好并记住。            */
+const TOKEN_KEY = "upx_token";
+let TOKEN = "";
+
+(function initToken() {
+  const q = new URLSearchParams(location.search).get("token");
+  if (q) {
+    TOKEN = q.trim();
+    try { localStorage.setItem(TOKEN_KEY, TOKEN); } catch (e) { /* 隐私模式忽略 */ }
+  } else {
+    try { TOKEN = localStorage.getItem(TOKEN_KEY) || ""; } catch (e) { TOKEN = ""; }
   }
-  const r = await fetch(path, opt);
+})();
+
+function setToken(v) {
+  TOKEN = (v || "").trim();
+  try { localStorage.setItem(TOKEN_KEY, TOKEN); } catch (e) { /* ignore */ }
+  const box = $("#inToken");
+  if (box) box.value = TOKEN;
+}
+
+function _opt(method, body) {
+  const headers = {};
+  if (TOKEN) headers["X-UPX-Token"] = TOKEN;
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const opt = { method, headers };
+  if (body !== undefined) opt.body = JSON.stringify(body);
+  return opt;
+}
+
+async function api(path, method = "GET", body) {
+  let r = await fetch(path, _opt(method, body));
+  if (r.status === 401) {
+    // 口令缺失或不对。让用户输入一次后重试，避免每个按钮都报「未授权」。
+    const v = prompt(
+      "未授权：需要访问口令。\n\n" +
+      "它是 install.sh 结束时打印的那串（或容器环境变量 UPX_TOKEN）。\n" +
+      "也可以直接用 http://" + location.host + "/?token=xxxx 打开。",
+      TOKEN || "");
+    if (v !== null) {
+      setToken(v);
+      r = await fetch(path, _opt(method, body));
+    }
+  }
   let data = null;
   try { data = await r.json(); } catch (e) { data = { ok: false, message: "响应不是 JSON" }; }
   if (!r.ok || data.ok === false) {
+    if (r.status === 401) {
+      throw new Error("口令不对，接口仍未授权");
+    }
     throw new Error(data.message || data.detail || `HTTP ${r.status}`);
   }
   return data;
@@ -426,5 +469,21 @@ $("#btnUninstall").addEventListener("click", () => safe(async () => {
   $("#uninstOut").textContent = d.go.message || d.go.status;
   await loadState();
 }, "卸载"));
+
+/* ---------------- 口令输入框 ---------------- */
+{
+  const box = $("#inToken");
+  if (box) {
+    box.value = TOKEN;
+    box.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") $("#btnToken").click();
+    });
+  }
+  $("#btnToken").addEventListener("click", () => {
+    setToken(box ? box.value : "");
+    toast(TOKEN ? "口令已保存" : "口令已清空");
+    loadState().catch((e) => toast(`刷新失败：${e.message}`));
+  });
+}
 
 loadState().then(loadBackups).catch((e) => toast(`初始化失败：${e.message}`));

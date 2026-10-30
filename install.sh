@@ -66,8 +66,11 @@ docker run -d \
 
 echo
 echo "==> 完成"
-echo "    访问： http://$(hostname -i 2>/dev/null | awk '{print $1}'):${PORT}/"
+IP="$(hostname -i 2>/dev/null | awk '{print $1}')"
+echo "    直接点这个（已带口令，浏览器会自动记住）："
+echo "      http://${IP}:${PORT}/?token=${UPX_TOKEN}"
 echo "    口令： ${UPX_TOKEN}"
+echo "    （不入口令的话，页面上所有操作都会显示「未授权」）"
 echo
 echo "下一步：先在 WebUI「下发」页点「生成变更预览」核对 diff，确认无误再点「应用变更」。"
 echo "rc.docker 的行格式随 Unraid 版本变化，首次使用请务必人工核对一次。"

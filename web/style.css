@@ -32,6 +32,18 @@ header {
 header h1 { margin: 0; font-size: 17px; font-weight: 500; }
 header .sub { color: var(--muted); font-size: 13px; }
 header .env { margin-left: auto; color: var(--muted); font-size: 12px; }
+header .auth { display: flex; align-items: center; gap: 6px; }
+header .auth input {
+  width: 160px;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-family: var(--mono, monospace);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+}
+header .auth button { padding: 5px 12px; font-size: 12px; }
 nav {
   display: flex;
   gap: 4px;
