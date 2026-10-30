@@ -1,0 +1,31 @@
+services:
+  uproxy:
+    build: .
+    image: uproxy:latest
+    container_name: uproxy
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    environment:
+      UPX_HOST_ROOT: /host
+      UPX_STATE_DIR: /config
+      TZ: Asia/Shanghai
+    volumes:
+      # 持久化：U 盘配置（开机脚本 go / CA 商店配置）
+      - /boot:/host/boot
+      # Docker 守护进程配置
+      - /etc/docker:/host/etc/docker
+      # rc.docker 启动脚本（dockerd 代理注入点）
+      - /usr/local/etc/rc.d:/host/usr/local/etc/rc.d
+      # 系统级代理环境变量
+      - /etc/profile.d:/host/etc/profile.d
+      # 用于编排 WARP / sing-box 出口容器
+      - /var/run/docker.sock:/var/run/docker.sock
+      # 本工具自身状态与备份
+      - /mnt/user/appdata/uproxy:/config
+    networks:
+      - uproxy-net
+
+networks:
+  uproxy-net:
+    name: uproxy-net

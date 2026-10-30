@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>uproxy · Unraid 出网加速</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>uproxy</h1>
+  <span class="sub">Unraid 出网加速编排 · Docker 拉取 / CA 商店 / GitHub</span>
+  <span id="env" class="env"></span>
+</header>
+
+<nav>
+  <button class="tab on" data-tab="overview">概览</button>
+  <button class="tab" data-tab="outlet">出口</button>
+  <button class="tab" data-tab="push">下发</button>
+  <button class="tab" data-tab="backup">备份与还原</button>
+</nav>
+
+<main>
+<!-- ============ 概览 ============ -->
+<section id="tab-overview" class="on">
+  <div class="grid2">
+    <div class="card">
+      <h2>宿主机状态</h2>
+      <table id="probeTable" class="kv"></table>
+    </div>
+    <div class="card">
+      <h2>连通性体检</h2>
+      <div class="row">
+        <button id="btnHealth">开始体检</button>
+        <label class="chk"><input type="checkbox" id="healthViaProxy"> 同时测「走代理」</label>
+      </div>
+      <div id="healthOut" class="out"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 出口 ============ -->
+<section id="tab-outlet">
+  <div class="card">
+    <h2>出口模式</h2>
+    <div class="row wrap">
+      <label class="opt"><input type="radio" name="mode" value="none"> 不用代理（仅镜像源）</label>
+      <label class="opt"><input type="radio" name="mode" value="manual"> 手动填代理地址</label>
+      <label class="opt"><input type="radio" name="mode" value="warp"> Cloudflare WARP（免费）</label>
+      <label class="opt"><input type="radio" name="mode" value="singbox"> sing-box（订阅节点）</label>
+    </div>
+    <div id="pane-manual" class="pane">
+      <div class="row">
+        <input id="inHttp" placeholder="http://192.168.1.5:7890">
+        <input id="inSocks" placeholder="socks5://192.168.1.5:1080（可选）">
+        <button id="btnProbe">探测可用性</button>
+      </div>
+      <div id="probeOut" class="out"></div>
+    </div>
+    <div id="pane-warp" class="pane">
+      <p class="hint">在 Unraid 上拉起一个 WARP 容器作为免费出口。免费、无限流量，但出口 IP 是共享的，GitHub / Docker Hub 偶有限流。</p>
+      <div class="row">
+        <input id="inWarpPort" type="number" placeholder="9091" style="max-width:120px">
+        <input id="inWarpImage" placeholder="镜像">
+        <input id="inWarpEndpointIp" placeholder="接入点 IP（可选，留空用域名）" style="max-width:230px">
+        <button id="btnWarpPrecheck">启动前预检</button>
+        <button id="btnWarpStart">启动</button>
+        <button id="btnWarpStop">停止</button>
+        <button id="btnWarpTest">验证是否走 WARP</button>
+        <button id="btnWarpStatus">状态</button>
+      </div>
+      <p class="hint">「接入点 IP」用于绕开被污染的 DNS：部分网络把 WARP 的接入点域名解析到黑洞 IP，此时预检会给出可达 IP，填进去即可。</p>
+      <div id="warpOut" class="out"></div>
+    </div>
+    <div id="pane-singbox" class="pane">
+      <h3>订阅</h3>
+      <div class="row">
+        <input id="inSubUrl" placeholder="订阅地址 https://...">
+        <input id="inSubUa" placeholder="UA（可选）" style="max-width:160px">
+        <button id="btnSubFetch">拉取并解析</button>
+        <button id="btnSubTest">节点测速</button>
+      </div>
+      <label class="lbl">或直接粘贴订阅内容 / Clash YAML</label>
+      <textarea id="inSubRaw" rows="4" placeholder="vmess://... 或 proxies:"></textarea>
+      <div id="subOut" class="out"></div>
+      <h3>出口</h3>
+      <div class="row">
+        <select id="selNode"></select>
+        <input id="inSbPort" type="number" placeholder="7890" style="max-width:120px">
+        <button id="btnSbStart">启动 sing-box</button>
+        <button id="btnSbStop">停止</button>
+      </div>
+      <div id="sbOut" class="out"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 下发 ============ -->
+<section id="tab-push">
+  <div class="card">
+    <h2>下发目标</h2>
+    <div class="row wrap">
+      <label class="opt"><input type="checkbox" id="t-dockerd"> dockerd 代理（解决 docker pull）</label>
+      <label class="opt"><input type="checkbox" id="t-mirror"> 镜像加速 registry-mirrors</label>
+      <label class="opt"><input type="checkbox" id="t-ca"> CA 应用商店代理</label>
+      <label class="opt"><input type="checkbox" id="t-system"> 系统环境变量（wget/git）</label>
+    </div>
+    <div class="row wrap">
+      <label class="chk"><input type="checkbox" id="allowRestart"> 允许重启 Docker 服务</label>
+      <label class="chk"><input type="checkbox" id="emhttpProxy"> 让 WebGUI(emhttp) 也走代理（高级）</label>
+      <label class="chk"><input type="checkbox" id="restartNow"> 应用后立即重启 Docker</label>
+    </div>
+    <p class="warn">重启 Docker 会按「自动启动」设置重启全部容器，请确保已停下重要服务。</p>
+    <div class="row"><button id="btnPlan">生成变更预览</button> <button id="btnApply" class="primary">应用变更</button></div>
+    <div id="planOut" class="out"></div>
+  </div>
+
+  <div class="card">
+    <h2>镜像源池</h2>
+    <p class="hint">公共镜像源时效性极强，写死必然踩坑。这里会逐个探测 /v2/ 并按响应速度排序。</p>
+    <textarea id="inMirrors" rows="6"></textarea>
+    <div class="row">
+      <button id="btnMirrorCheck">体检镜像源</button>
+      <button id="btnMirrorAuto">按速度自动排序并只保留前 3 个</button>
+    </div>
+    <div id="mirrorOut" class="out"></div>
+  </div>
+
+  <div class="card">
+    <h2>不走代理的地址</h2>
+    <input id="inNoProxy" class="wide">
+    <p class="hint">默认已排除内网网段，避免 PT、局域网服务被误走代理。</p>
+  </div>
+</section>
+
+<!-- ============ 备份 ============ -->
+<section id="tab-backup">
+  <div class="card">
+    <h2>备份</h2>
+    <p class="hint">每次写入前都会自动备份原文件（保留最近 40 份）。</p>
+    <div class="row">
+      <select id="selBackupKey">
+        <option value="rc_docker">rc.docker</option>
+        <option value="daemon_json">daemon.json</option>
+        <option value="ca_proxy">CA proxy.cfg</option>
+        <option value="go_file">/boot/config/go</option>
+        <option value="profile_env">系统环境变量</option>
+      </select>
+      <button id="btnRestore">还原该目标最近一次备份</button>
+      <button id="btnRefreshBak">刷新列表</button>
+    </div>
+    <div id="bakOut" class="out"></div>
+  </div>
+  <div class="card">
+    <h2>卸载</h2>
+    <p class="hint">只移除 /boot/config/go 里的托管块，不还原其他文件（请用上面的还原功能）。</p>
+    <button id="btnUninstall">移除开机重放块</button>
+    <div id="uninstOut" class="out"></div>
+  </div>
+</section>
+</main>
+
+<div id="toast" class="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

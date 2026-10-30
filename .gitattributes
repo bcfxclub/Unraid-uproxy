@@ -1,0 +1,9 @@
+# 所有文本文件在仓库与工作区都统一用 LF。
+# 关键是 install.sh / uninstall.sh：CRLF 会让 Unraid 上的 bash 报
+# "bad interpreter: /bin/bash^M"，脚本直接跑不起来。
+* text=auto eol=lf
+
+# 二进制不做任何转换
+*.png binary
+*.jpg binary
+*.ico binary

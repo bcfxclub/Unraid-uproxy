@@ -1,0 +1,115 @@
+"""全局配置模型与持久化。"""
+from __future__ import annotations
+
+import json
+import os
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from . import settings as S
+
+DEFAULT_MIRRORS: list[str] = [
+    "https://docker.xuanyuan.me",
+    "https://docker.1ms.run",
+    "https://docker.m.daocloud.io",
+    "https://hub-mirror.c.163.com",
+    "https://docker.mirrors.ustc.edu.cn",
+    "https://docker.nju.edu.cn",
+    "https://docker.mirrors.sjtug.sjtu.edu.cn",
+    "https://mirror.baidubce.com",
+]
+
+DEFAULT_NO_PROXY = "localhost,127.0.0.1,::1,.local,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12"
+
+OUTLET_MODES = ("none", "manual", "warp", "singbox")
+
+
+class OutletCfg(BaseModel):
+    mode: str = "none"
+    http: str = ""
+    socks: str = ""
+
+    warp_image: str = "ghcr.io/mon-ius/docker-warp-socks"
+    warp_port: int = 9091
+    warp_alt_image: str = "ghcr.io/ccbkkb/microwarp:latest"
+    # WARP 的 endpoint 域名常被解析到黑洞 IP，填 IP 可强制绕过（走 --add-host）
+    warp_endpoint_ip: str = ""
+
+    sb_image: str = "ghcr.io/sagernet/sing-box:latest"
+    sb_port: int = 7890
+    sb_node: str = ""
+    sb_nodes: list[dict[str, Any]] = Field(default_factory=list)
+
+    sub_url: str = ""
+    sub_ua: str = "clash.meta"
+
+
+class AppCfg(BaseModel):
+    version: int = 1
+    outlet: OutletCfg = Field(default_factory=OutletCfg)
+    targets: dict[str, bool] = Field(
+        default_factory=lambda: {
+            "dockerd": True,
+            "mirror": True,
+            "ca": True,
+            "system": False,
+        }
+    )
+    mirrors: list[str] = Field(default_factory=lambda: list(DEFAULT_MIRRORS))
+    auto_mirror: bool = True
+    ca_tunnel: int = 1
+    emhttp_proxy: bool = False
+    no_proxy: str = DEFAULT_NO_PROXY
+    allow_restart_docker: bool = False
+
+
+_cfg: AppCfg | None = None
+
+
+def load() -> AppCfg:
+    global _cfg
+    if _cfg is not None:
+        return _cfg
+    S.ensure_dirs()
+    if os.path.exists(S.STATE_FILE):
+        try:
+            with open(S.STATE_FILE, "r", encoding="utf-8") as f:
+                _cfg = AppCfg.model_validate(json.load(f))
+            return _cfg
+        except Exception:
+            pass
+    _cfg = AppCfg()
+    save(_cfg)
+    return _cfg
+
+
+def save(cfg: AppCfg) -> None:
+    global _cfg
+    S.ensure_dirs()
+    tmp = str(S.STATE_FILE) + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cfg.model_dump(), f, ensure_ascii=False, indent=2)
+    os.replace(tmp, S.STATE_FILE)
+    _cfg = cfg
+
+
+def patch(data: dict[str, Any]) -> AppCfg:
+    """按前端提交的字段做浅合并更新。"""
+    cfg = load()
+    for k, v in (data or {}).items():
+        if not hasattr(cfg, k):
+            continue
+        cur = getattr(cfg, k)
+        if isinstance(cur, BaseModel) and isinstance(v, dict):
+            merged = cur.model_dump()
+            merged.update(v)
+            setattr(cfg, k, type(cur).model_validate(merged))
+        elif isinstance(cur, dict) and isinstance(v, dict):
+            merged = dict(cur)
+            merged.update(v)
+            setattr(cfg, k, merged)
+        else:
+            setattr(cfg, k, v)
+    save(cfg)
+    return cfg

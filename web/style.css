@@ -1,0 +1,148 @@
+:root {
+  --bg: #f7f7f5;
+  --card: #ffffff;
+  --line: #e3e2dd;
+  --text: #2c2c2a;
+  --muted: #6b6a64;
+  --accent: #185fa5;
+  --accent-soft: #e6f1fb;
+  --ok: #0f6e56;
+  --ok-soft: #e1f5ee;
+  --warn: #854f0b;
+  --warn-soft: #faeeda;
+  --bad: #a32d2d;
+  --bad-soft: #fcebeb;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+header {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--card);
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+header h1 { margin: 0; font-size: 17px; font-weight: 500; }
+header .sub { color: var(--muted); font-size: 13px; }
+header .env { margin-left: auto; color: var(--muted); font-size: 12px; }
+nav {
+  display: flex;
+  gap: 4px;
+  padding: 10px 24px 0;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+}
+nav button {
+  border: 0;
+  background: transparent;
+  padding: 8px 14px;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 14px;
+}
+nav button.on { background: var(--accent-soft); color: var(--accent); }
+main { padding: 20px 24px 60px; max-width: 1180px; }
+section { display: none; }
+section.on { display: block; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+.card h2 { margin: 0 0 12px; font-size: 14px; font-weight: 500; }
+.card h3 { margin: 16px 0 8px; font-size: 13px; font-weight: 500; }
+.row { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+.row.wrap { gap: 14px; }
+.lbl { display: block; margin: 8px 0 4px; color: var(--muted); font-size: 12px; }
+input, select, textarea {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font: inherit;
+  background: #fff;
+  color: var(--text);
+  min-width: 180px;
+}
+input.wide, textarea { width: 100%; }
+textarea { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+button {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 8px;
+  padding: 7px 14px;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text);
+}
+button:hover { border-color: var(--accent); color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary:hover { opacity: .9; color: #fff; }
+.opt, .chk { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
+.hint { color: var(--muted); font-size: 12px; margin: 6px 0; }
+.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  margin: 8px 0;
+}
+.pane { display: none; border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
+.pane.on { display: block; }
+.out { margin-top: 10px; font-size: 13px; }
+.out:empty { margin: 0; }
+pre.diff {
+  background: #fbfbf9;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  overflow: auto;
+  font-size: 12px;
+  margin: 6px 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.kv td { padding: 5px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.kv td:first-child { color: var(--muted); width: 40%; }
+table.data th, table.data td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+table.data th { color: var(--muted); font-weight: 400; }
+.pill {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid transparent;
+}
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.bad { background: var(--bad-soft); color: var(--bad); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.mute { background: #f1efe8; color: var(--muted); }
+.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+.toast {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  background: #2c2c2a;
+  color: #fff;
+  padding: 10px 16px;
+  border-radius: 8px;
+  opacity: 0;
+  transition: opacity .2s;
+  pointer-events: none;
+  max-width: 70vw;
+  font-size: 13px;
+}
+.toast.on { opacity: 1; }

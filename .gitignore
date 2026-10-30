@@ -1,0 +1,19 @@
+# 本地运行产物
+.fakehost/
+.fakestate/
+.server.log
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 状态与备份（含宿主机真实配置，绝不入库）
+state/
+config/
+*.bak

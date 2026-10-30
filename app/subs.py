@@ -1,0 +1,415 @@
+"""订阅解析：把订阅内容转成 sing-box 出站配置。
+
+支持 vmess / vless / trojan / shadowsocks / hysteria2 / http / socks，
+以及 Clash YAML 格式的订阅。ssr 等不再维护的协议会明确标记为不支持。
+"""
+from __future__ import annotations
+
+import base64
+import json
+import re
+import socket
+import time
+import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
+
+import yaml
+
+from . import host
+
+SUPPORTED = ("vmess", "vless", "trojan", "ss", "shadowsocks", "hysteria2", "hy2", "http", "socks", "socks5")
+
+
+def _b64(s: str) -> str:
+    s = (s or "").strip()
+    if not s:
+        return ""
+    t = s.replace("-", "+").replace("_", "/")
+    t += "=" * (-len(t) % 4)
+    try:
+        return base64.b64decode(t).decode("utf-8", "replace")
+    except Exception:
+        try:
+            return base64.b64decode(s).decode("utf-8", "replace")
+        except Exception:
+            return ""
+
+
+def fetch(url: str, ua: str = "clash.meta", timeout: int = 20, proxy: str = "") -> dict:
+    argv = ["curl", "-sS", "--max-time", str(timeout), "-A", ua or "clash.meta"]
+    if proxy:
+        argv += ["-x", proxy]
+    argv.append(url)
+    r = host.run(argv, timeout=timeout + 5)
+    if r["rc"] != 0:
+        return {"ok": False, "message": (r["err"] or "抓取失败")[:400], "raw": ""}
+    if not r["out"]:
+        return {"ok": False, "message": "订阅返回为空", "raw": ""}
+    return {"ok": True, "message": "ok", "raw": r["out"]}
+
+
+# --------------------------------------------------------------------------
+# 单条 URI -> sing-box outbound
+# --------------------------------------------------------------------------
+def _split_uri(uri: str) -> tuple[str, str, str, dict]:
+    uri = uri.strip()
+    if "://" not in uri:
+        return "", "", "", {}
+    scheme, rest = uri.split("://", 1)
+    name = ""
+    if "#" in rest:
+        rest, frag = rest.split("#", 1)
+        name = urllib.parse.unquote(frag)
+    query: dict[str, str] = {}
+    if "?" in rest:
+        rest, qs = rest.split("?", 1)
+        parsed = urllib.parse.parse_qs(qs)
+        query = {k: v[0] for k, v in parsed.items() if v}
+    return scheme.lower(), rest, name, query
+
+
+def _tls_obj(query: dict, host: str = "", default_fp: str = "chrome") -> dict | None:
+    sec = (query.get("security") or "").lower()
+    if sec not in ("tls", "reality") and not query.get("sni"):
+        return None
+    t: dict = {
+        "enabled": True,
+        "server_name": query.get("sni") or query.get("peer") or host or "",
+    }
+    if query.get("allowInsecure") in ("1", "true", "True"):
+        t["insecure"] = True
+    fp = query.get("fp") or default_fp
+    if fp and fp != "none":
+        t["utls"] = {"enabled": True, "fingerprint": fp}
+    if sec == "reality":
+        t["reality"] = {
+            "enabled": True,
+            "public_key": query.get("pbk", ""),
+            "short_id": query.get("sid", ""),
+        }
+    # 部分订阅会写 alpn=default / 空值，不是合法 ALPN，必须过滤掉
+    vals = [a for a in (query.get("alpn") or "").split(",") if a and a != "default"]
+    if vals:
+        t["alpn"] = vals
+    if not t["server_name"]:
+        t.pop("server_name")
+    return t
+
+
+def _transport(query: dict) -> dict | None:
+    net = (query.get("type") or query.get("network") or "tcp").lower()
+    path = query.get("path") or "/"
+    host = query.get("host") or ""
+    if net in ("ws", "websocket"):
+        tr: dict = {"type": "ws", "path": path}
+        if host:
+            tr["headers"] = {"Host": host}
+        return tr
+    if net == "grpc":
+        return {"type": "grpc", "service_name": query.get("serviceName") or path}
+    if net in ("h2", "http"):
+        tr = {"type": "http", "path": path}
+        if host:
+            tr["host"] = [host]
+        return tr
+    if net == "httpupgrade":
+        tr = {"type": "httpupgrade", "path": path}
+        if host:
+            tr["headers"] = {"Host": host}
+        return tr
+    return None
+
+
+def _vmess(rest: str, name: str) -> dict | None:
+    raw = _b64(rest)
+    if not raw.startswith("{"):
+        return None
+    try:
+        d = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    try:
+        port = int(d.get("port", 0))
+    except (TypeError, ValueError):
+        return None
+    if not d.get("add") or not port:
+        return None
+    tag = d.get("ps") or name or f"{d.get('add')}:{port}"
+    ob: dict = {
+        "type": "vmess",
+        "tag": tag,
+        "server": d.get("add"),
+        "server_port": port,
+        "uuid": d.get("id", ""),
+        "security": d.get("scy") or "auto",
+        "alter_id": int(d.get("aid") or 0),
+    }
+    net = (d.get("net") or "tcp").lower()
+    if net == "ws":
+        tr = {"type": "ws", "path": d.get("path") or "/"}
+        if d.get("host"):
+            tr["headers"] = {"Host": d.get("host")}
+        ob["transport"] = tr
+    elif net == "grpc":
+        ob["transport"] = {"type": "grpc", "service_name": d.get("path") or ""}
+    elif net == "h2":
+        ob["transport"] = {"type": "http", "path": d.get("path") or "/"}
+    if str(d.get("tls", "")).lower() == "tls":
+        ob["tls"] = _tls_obj({"security": "tls", "sni": d.get("sni") or d.get("host") or "",
+                              "fp": d.get("fp") or "chrome"}, d.get("host") or "")
+    return {"name": tag, "type": "vmess", "server": ob["server"], "port": port, "outbound": ob}
+
+
+def _vless_trojan(scheme: str, rest: str, name: str, query: dict) -> dict | None:
+    if "@" not in rest:
+        return None
+    cred, hostport = rest.rsplit("@", 1)
+    if ":" not in hostport:
+        return None
+    host, _, port_s = hostport.rpartition(":")
+    try:
+        port = int(port_s)
+    except ValueError:
+        return None
+    tag = name or f"{host}:{port}"
+    if scheme == "vless":
+        ob: dict = {"type": "vless", "tag": tag, "server": host, "server_port": port,
+                    "uuid": cred, "packet_encoding": "xudp"}
+        if query.get("flow"):
+            ob["flow"] = query["flow"]
+    else:
+        ob = {"type": "trojan", "tag": tag, "server": host, "server_port": port,
+              "password": urllib.parse.unquote(cred)}
+    tls = _tls_obj(query, host)
+    if tls:
+        ob["tls"] = tls
+    tr = _transport(query)
+    if tr:
+        ob["transport"] = tr
+    return {"name": tag, "type": scheme, "server": host, "port": port, "outbound": ob}
+
+
+def _ss(rest: str, name: str, query: dict) -> dict | None:
+    if "@" in rest:
+        userinfo, hostport = rest.rsplit("@", 1)
+    else:
+        dec = _b64(rest)
+        if "@" not in dec:
+            return None
+        userinfo, hostport = dec.rsplit("@", 1)
+        userinfo = _b64(userinfo) or userinfo
+
+    if ":" not in hostport:
+        return None
+    host, _, port_s = hostport.rpartition(":")
+    port_s = re.sub(r"\D.*$", "", port_s)
+    try:
+        port = int(port_s)
+    except ValueError:
+        return None
+
+    if ":" in userinfo:
+        method, password = userinfo.split(":", 1)
+    else:
+        dec = _b64(userinfo)
+        if ":" not in dec:
+            return None
+        method, password = dec.split(":", 1)
+
+    tag = name or f"{host}:{port}"
+    ob: dict = {"type": "shadowsocks", "tag": tag, "server": host, "server_port": port,
+                "method": method, "password": password}
+    plugin = query.get("plugin")
+    if plugin and "obfs" in plugin:
+        ob["plugin"] = "obfs"
+        ob["plugin_opts"] = query.get("plugin-opts") or ""
+    return {"name": tag, "type": "shadowsocks", "server": host, "port": port, "outbound": ob}
+
+
+def _hysteria2(rest: str, name: str, query: dict) -> dict | None:
+    if "@" not in rest:
+        return None
+    cred, hostport = rest.rsplit("@", 1)
+    if ":" not in hostport:
+        return None
+    host, _, port_s = hostport.rpartition(":")
+    try:
+        port = int(re.sub(r"\D.*$", "", port_s))
+    except ValueError:
+        return None
+    tag = name or f"{host}:{port}"
+    ob: dict = {"type": "hysteria2", "tag": tag, "server": host, "server_port": port,
+                "password": urllib.parse.unquote(cred)}
+    tls = _tls_obj({"security": "tls", "sni": query.get("sni") or host,
+                    "allowInsecure": query.get("insecure") or "1"}, host)
+    if tls:
+        ob["tls"] = tls
+    if query.get("obfs"):
+        ob["obfs"] = {"type": query["obfs"], "password": query.get("obfs-password", "")}
+    return {"name": tag, "type": "hysteria2", "server": host, "port": port, "outbound": ob}
+
+
+def _http_socks(scheme: str, rest: str, name: str) -> dict | None:
+    user, passwd = "", ""
+    if "@" in rest:
+        cred, hostport = rest.rsplit("@", 1)
+        if ":" in cred:
+            user, passwd = cred.split(":", 1)
+            user, passwd = urllib.parse.unquote(user), urllib.parse.unquote(passwd)
+    else:
+        hostport = rest
+    if ":" not in hostport:
+        return None
+    host, _, port_s = hostport.rpartition(":")
+    try:
+        port = int(re.sub(r"\D.*$", "", port_s))
+    except ValueError:
+        return None
+    tag = name or f"{host}:{port}"
+    typ = "http" if scheme == "http" else "socks"
+    ob: dict = {"type": typ, "tag": tag, "server": host, "server_port": port}
+    if typ == "socks":
+        ob["version"] = "5"
+    if user:
+        ob["username"], ob["password"] = user, passwd
+    return {"name": tag, "type": typ, "server": host, "port": port, "outbound": ob}
+
+
+def _from_clash(doc: dict) -> list[dict]:
+    out = []
+    for p in (doc.get("proxies") or []):
+        t = (p.get("type") or "").lower()
+        tag = p.get("name") or f"{p.get('server')}:{p.get('port')}"
+        try:
+            port = int(p.get("port") or 0)
+        except (TypeError, ValueError):
+            port = 0
+        host = p.get("server") or ""
+        if not host or not port:
+            continue
+        if t == "vmess":
+            ob = {"type": "vmess", "tag": tag, "server": host, "server_port": port,
+                  "uuid": p.get("uuid", ""), "security": p.get("cipher") or "auto",
+                  "alter_id": int(p.get("alterId") or 0)}
+            if p.get("network") == "ws":
+                opts = p.get("ws-opts") or p.get("ws-path") or {}
+                tr = {"type": "ws", "path": (opts.get("path") if isinstance(opts, dict) else None) or "/"}
+                if isinstance(opts, dict) and (opts.get("headers") or {}).get("Host"):
+                    tr["headers"] = {"Host": opts["headers"]["Host"]}
+                ob["transport"] = tr
+            if p.get("tls") or p.get("servername"):
+                ob["tls"] = {"enabled": True, "server_name": p.get("servername") or p.get("sni") or ""}
+        elif t == "vless":
+            ob = {"type": "vless", "tag": tag, "server": host, "server_port": port,
+                  "uuid": p.get("uuid", ""), "packet_encoding": "xudp"}
+            if p.get("flow"):
+                ob["flow"] = p["flow"]
+            if p.get("tls") or p.get("servername"):
+                ob["tls"] = {"enabled": True, "server_name": p.get("servername") or p.get("sni") or ""}
+        elif t == "trojan":
+            ob = {"type": "trojan", "tag": tag, "server": host, "server_port": port,
+                  "password": p.get("password", "")}
+            if p.get("sni"):
+                ob["tls"] = {"enabled": True, "server_name": p.get("sni")}
+        elif t in ("ss", "shadowsocks"):
+            ob = {"type": "shadowsocks", "tag": tag, "server": host, "server_port": port,
+                  "method": p.get("cipher", ""), "password": p.get("password", "")}
+        elif t in ("hysteria2", "hy2"):
+            ob = {"type": "hysteria2", "tag": tag, "server": host, "server_port": port,
+                  "password": p.get("password", "")}
+            if p.get("sni"):
+                ob["tls"] = {"enabled": True, "server_name": p.get("sni")}
+        else:
+            continue
+        out.append({"name": tag, "type": ob["type"], "server": host, "port": port, "outbound": ob})
+    return out
+
+
+def parse(text: str) -> dict:
+    raw = (text or "").strip()
+    if not raw:
+        return {"nodes": [], "unsupported": [], "message": "内容为空"}
+
+    # Clash YAML
+    if raw.startswith("{") or "\nproxies:" in raw or raw.startswith("proxies:"):
+        try:
+            doc = yaml.safe_load(raw)
+            if isinstance(doc, dict) and doc.get("proxies"):
+                nodes = _from_clash(doc)
+                return {"nodes": _dedupe(nodes), "unsupported": [],
+                        "message": f"Clash 订阅解析成功，{len(nodes)} 个节点"}
+        except Exception:
+            pass
+
+    body = raw
+    if "://" not in body:
+        dec = _b64(body)
+        if "://" in dec:
+            body = dec
+
+    nodes, unsupported = [], []
+    for line in body.replace("\r", "\n").split("\n"):
+        line = line.strip()
+        if "://" not in line:
+            continue
+        scheme, rest, name, query = _split_uri(line)
+        if scheme not in SUPPORTED:
+            unsupported.append(scheme)
+            continue
+        try:
+            if scheme == "vmess":
+                n = _vmess(rest, name)
+            elif scheme in ("vless", "trojan"):
+                n = _vless_trojan(scheme, rest, name, query)
+            elif scheme in ("ss", "shadowsocks"):
+                n = _ss(rest, name, query)
+            elif scheme in ("hysteria2", "hy2"):
+                n = _hysteria2(rest, name, query)
+            else:
+                n = _http_socks(scheme, rest, name)
+        except Exception:
+            n = None
+        if n:
+            nodes.append(n)
+        else:
+            unsupported.append(scheme)
+
+    return {
+        "nodes": _dedupe(nodes),
+        "unsupported": sorted(set(unsupported)),
+        "message": f"解析 {len(nodes)} 个节点" + (f"，跳过不支持：{','.join(sorted(set(unsupported)))}" if unsupported else ""),
+    }
+
+
+def _dedupe(nodes: list[dict]) -> list[dict]:
+    seen: dict[str, int] = {}
+    out = []
+    for n in nodes:
+        tag = n["outbound"].get("tag") or n["name"]
+        if tag in seen:
+            seen[tag] += 1
+            n["outbound"]["tag"] = f"{tag}-{seen[tag]}"
+            n["name"] = n["outbound"]["tag"]
+        else:
+            seen[tag] = 0
+        out.append(n)
+    return out
+
+
+def _tcp_ping(node: dict, timeout: float = 3.0) -> dict:
+    start = time.time()
+    try:
+        with socket.create_connection((node["server"], int(node["port"])), timeout=timeout):
+            ms = int((time.time() - start) * 1000)
+        return {"tag": node["name"], "ms": ms, "reachable": True}
+    except OSError:
+        return {"tag": node["name"], "ms": None, "reachable": False}
+
+
+def test_nodes(nodes: list[dict], timeout: float = 3.0) -> list[dict]:
+    if not nodes:
+        return []
+    with ThreadPoolExecutor(max_workers=min(16, len(nodes))) as ex:
+        res = list(ex.map(lambda n: _tcp_ping(n, timeout), nodes))
+    res.sort(key=lambda x: (not x["reachable"], x["ms"] if x["ms"] is not None else 999999))
+    return res
