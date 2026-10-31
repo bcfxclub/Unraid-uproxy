@@ -30,7 +30,7 @@ chmod +x install.sh && ./install.sh
 ```
 
 脚本会自动：建目录 → 拷源码 → 装 Unraid 容器模板 → `docker build` →
-生成随机访问口令 → 启动容器。不依赖 docker compose。
+生成随机登录密码 → 启动容器。不依赖 docker compose。
 
 卸载：`./uninstall.sh`（会先提示你去 WebUI 移除开机重放块并还原文件）。
 
@@ -47,15 +47,16 @@ docker compose up -d --build
 再到 Unraid WebUI 的 Docker 页 → Add Container → 模板选 `uproxy`。
 （需先把镜像 `docker build -t uproxy:latest .` 出来）
 
-### 访问口令
+### 访问账号
 
-**强烈建议设置**，否则同网段任何人都能改你的 Docker 配置：
+**强烈建议设置密码**，否则同网段任何人都能改你的 Docker 配置。默认用户名为 `admin`，
+密码可用环境变量预设，不设则 `install.sh` 自动生成并打印：
 
 ```bash
-UPX_TOKEN="换成你自己的长随机串" ./install.sh
+UPX_PASSWORD="换成你自己的长随机串" ./install.sh
 ```
 
-打开 `http://<Unraid-IP>:8765`。
+打开 `http://<Unraid-IP>:8765`，用「用户名 + 密码」登录（默认 `admin` / 你设的密码）。
 
 ## 界面
 
@@ -70,7 +71,22 @@ UPX_TOKEN="换成你自己的长随机串" ./install.sh
 ![文档页](docs/screenshot-docs.png)
 
 侧边栏分组：**总览**（概览）、**出口**（出口 / 订阅）、**系统**（下发 / 备份与还原 / 文档）。
-底部为访问口令输入框。顶部状态徽章实时显示是否已接入宿主机。
+顶部状态徽章实时显示是否已接入宿主机，右上角显示当前登录用户与「退出」。
+
+### 登录方式：用户名 + 密码
+
+不再用裸 token。首次打开会弹出登录页（仿 v2rayA 的登录框），输入用户名与密码即可；
+登录后浏览器自动记住会话，无需再次输入。默认用户名 `admin`，密码由 `install.sh` 打印
+（也可通过环境变量 `UPX_PASSWORD` 预设）。老的 `?token=` 直连链接仍可兼容使用。
+
+> 安全提示：这是面向家庭局域网的工具，账户不存在「找回密码」；忘记密码就在 Unraid 终端
+> 重新跑一次 `install.sh` 或给容器重设 `UPX_PASSWORD` 后重启。
+
+### 实时流量面板
+
+概览页下方有一块「实时流量」卡片：用 canvas 画的上行 / 下行实时面积图（每 1.5s 刷新），
+并显示当前速率、活动连接数、累计收发字节。数据取自出口容器（WARP / sing-box）的真实网络吞吐，
+连接数仅 sing-box 提供。在「出口」页启动 WARP 或 sing-box 后，这里才会跳动。
 
 ## 出口方案怎么选
 
@@ -112,7 +128,7 @@ WebUI 的「探测可用性」会自动判定地址属于 `标准正向代理` /
 - `daemon.json` 解析失败时**拒绝写入**，不会覆盖你的现有配置
 - `rc.docker` 找不到 `nohup` 启动行时**跳过**，不冒险改启动脚本
 - 重启 Docker 需显式勾选「允许重启 Docker」，且会二次确认（该操作会按自动启动设置重启所有容器）
-- 无硬编码密钥；可选 `UPX_TOKEN` 做访问保护
+- 无硬编码密钥；可选 `UPX_PASSWORD` 做访问保护（默认用户名 `admin`）
 
 ## WARP 在国内网络的实测（2026-10）
 
