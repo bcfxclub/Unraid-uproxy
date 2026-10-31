@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Container version="2">
   <Name>uproxy</Name>
-  <!-- 存储库：默认指向 Docker Hub 公开发布的镜像 bcfxclub/uproxy:latest（可自动拉取更新）。
+  <!-- 存储库：默认指向 Docker Hub 公开发布的镜像 bcfx/uproxy:latest（可自动拉取更新）。
        若你在本机自行 docker build 了镜像，把它改成 uproxy:latest 即可。 -->
-  <Repository>bcfxclub/uproxy:latest</Repository>
+  <Repository>bcfx/uproxy:latest</Repository>
   <Registry>docker.io</Registry>
   <Network>bridge</Network>
   <Restart>unless-stopped</Restart>
