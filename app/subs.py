@@ -8,10 +8,7 @@ from __future__ import annotations
 import base64
 import json
 import re
-import socket
-import time
 import urllib.parse
-from concurrent.futures import ThreadPoolExecutor
 
 import yaml
 
@@ -456,25 +453,6 @@ def _dedupe(nodes: list[dict]) -> list[dict]:
             seen[tag] = 0
         out.append(n)
     return out
-
-
-def _tcp_ping(node: dict, timeout: float = 3.0) -> dict:
-    start = time.time()
-    try:
-        with socket.create_connection((node["server"], int(node["port"])), timeout=timeout):
-            ms = int((time.time() - start) * 1000)
-        return {"tag": node["name"], "ms": ms, "reachable": True}
-    except OSError:
-        return {"tag": node["name"], "ms": None, "reachable": False}
-
-
-def test_nodes(nodes: list[dict], timeout: float = 3.0) -> list[dict]:
-    if not nodes:
-        return []
-    with ThreadPoolExecutor(max_workers=min(16, len(nodes))) as ex:
-        res = list(ex.map(lambda n: _tcp_ping(n, timeout), nodes))
-    res.sort(key=lambda x: (not x["reachable"], x["ms"] if x["ms"] is not None else 999999))
-    return res
 
 
 def sync_subscriptions(subscriptions: list[dict], ua: str = "clash.meta",

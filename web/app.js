@@ -143,7 +143,8 @@ const Pop = (function () {
   function onDoc(e) {
     if (!cur) return;
     if (cur.contains(e.target)) return;
-    // 点 ⋮ 本身交给 toggle 处理，否则会「先关再开」
+    // 点触发器本身交给 toggle 处理，否则会「先关再开」
+    if (curAnchor && (e.target === curAnchor || curAnchor.contains(e.target))) return;
     if (e.target.classList && e.target.classList.contains("dots")) return;
     close();
   }
@@ -781,23 +782,124 @@ async function renameNode(n) {
   await loadState();
 }
 
-async function testOne(n) {
-  const one = nodeCache.find((x) => x.name === n.name);
-  if (!one) return;
+/* ---------------- 节点测速：HTTP 实测（真的走一遍） vs TCP 握手 ---------------- */
+const TEST_TARGET_KEY = "upx_test_target";
+const TEST_TARGETS = [
+  { label: "Google", url: "https://www.gstatic.com/generate_204" },
+  { label: "GitHub", url: "https://github.com/" },
+  { label: "Cloudflare", url: "https://cloudflare.com/cdn-cgi/trace" },
+];
+
+function testTarget() {
+  let t = null;
+  try { t = JSON.parse(localStorage.getItem(TEST_TARGET_KEY) || "null"); } catch (e) { t = null; }
+  return (t && t.url) ? t : { label: TEST_TARGETS[0].label, url: TEST_TARGETS[0].url };
+}
+
+function setTestTarget(t) {
+  try { localStorage.setItem(TEST_TARGET_KEY, JSON.stringify(t)); } catch (e) { /* 隐私模式忽略 */ }
+}
+
+function shortUrl(u) { return (u || "").replace(/^https?:\/\//, "").replace(/\/$/, ""); }
+
+/* 延迟结果的展示口径：HTTP 实测和 TCP 握手不能混为一谈 */
+function delayKind(r) {
+  if (!r || !r.reachable) return "bad";
+  if (r.mode === "tcp") return r.ms < 300 ? "ok" : "warn";
+  return r.ms < 800 ? "ok" : (r.ms < 2000 ? "warn" : "bad");
+}
+
+function delayText(r) {
+  if (!r) return "—";
+  if (!r.reachable) return r.mode === "http" ? "失败" : "TIMEOUT";
+  if (r.ms === null || r.ms === undefined) {
+    return r.mode === "http" && r.code ? `HTTP ${r.code}` : "OK";
+  }
+  return `${r.mode === "http" ? "HTTP " : "TCP "}${r.ms}ms`;
+}
+
+function delayTitle(r) {
+  if (!r) return "";
+  const head = r.mode === "http"
+    ? `经该节点访问 ${r.url || "测试地址"}${r.code ? `（HTTP ${r.code}）` : ""} 的实际耗时`
+    : "TCP 握手耗时（只连节点端口，不代表能出网）";
+  return r.error ? `${head}\n失败原因：${r.error}` : head;
+}
+
+async function runNodeTest(names, mode, url) {
+  const one = names && names.length === 1;
+  const tgt = mode === "tcp" ? null : (url ? { label: shortUrl(url), url } : testTarget());
+  const scope = one ? names[0] : (names ? `${names.length} 个节点` : "全部节点");
   const box = $("#subOut");
-  if (box) box.appendChild(el("div", "hint", `正在测速：${n.name}…`));
-  const d = await api("/api/subs/test", "POST", { nodes: [one] });
-  (d.results || []).forEach((r) => { delayMap[r.tag] = r; });
+  if (box) {
+    box.appendChild(el("div", "hint", mode === "tcp"
+      ? `正在握手测速（${scope}）…`
+      : `正在 HTTP 实测 → ${tgt.label}（${scope}），每个节点都要真连一次，请稍候…`));
+  }
+  const body = { mode, timeout: mode === "tcp" ? 3000 : 5000 };
+  if (tgt) body.url = tgt.url;
+  if (names) body.nodes = nodeCache.filter((x) => names.includes(x.name));
+  const d = await api("/api/subs/test", "POST", body);
+  const res = d.results || [];
+  if (!names) delayMap = {};
+  res.forEach((r) => { delayMap[r.tag] = r; });
   renderNodes();
-  const r = (d.results || [])[0];
-  toast(!r ? "测速失败" : (r.reachable ? `${n.name}: ${r.ms}ms` : `${n.name}: 不可达`));
+  const up = res.filter((r) => r.reachable);
+  if (one) {
+    const r = res[0];
+    toast(!r ? "测速失败"
+      : r.reachable ? `${names[0]}：${r.ms}ms（${d.mode === "http" ? "HTTP" : "TCP"}）`
+        : `${names[0]}：${r.error || "不可用"}`);
+    return;
+  }
+  const best = up.length ? Math.min.apply(null, up.map((r) => r.ms)) : null;
+  const head = d.mode === "http"
+    ? `HTTP 实测完成（${shortUrl(d.url)}）`
+    : (mode === "tcp" ? "TCP 握手完成" : "HTTP 实测跑不起来，已降级为 TCP 握手");
+  const line = `${head}：可用 ${up.length}/${res.length}` + (best !== null ? `，最快 ${best}ms` : "");
+  if (box) {
+    box.appendChild(el("div", "hint", line));
+    if (d.note) box.appendChild(el("div", "hint", `⚠ ${d.note}`));
+    const errs = res.filter((r) => !r.reachable && r.error).slice(0, 2);
+    errs.forEach((r) => box.appendChild(el("div", "hint", `${r.tag}：${r.error}`)));
+  }
+}
+
+async function customTestTarget() {
+  const cur = testTarget();
+  const v = await Modal.ask({
+    title: "自定义测速地址",
+    note: "填一个能正常返回内容的 https 地址；测的是「经该节点访问它」的往返耗时。",
+    value: cur.url,
+    placeholder: "https://www.google.com/",
+    okText: "开始测速",
+  });
+  if (!v) return;
+  let u = (v.value || "").trim();
+  if (!u) return;
+  if (!/^https?:\/\//i.test(u)) u = "https://" + u;
+  setTestTarget({ label: shortUrl(u), url: u });
+  await runNodeTest(null, "http", u);
+}
+
+function testMenuItems() {
+  const cur = testTarget();
+  const items = TEST_TARGETS.map((t) => ({
+    label: `HTTP 实测 · ${t.label}${cur.url === t.url ? "  ✓" : ""}`,
+    onClick: () => safe(() => runNodeTest(null, "http", t.url), "测速"),
+  }));
+  items.push({ label: "HTTP 实测 · 自定义地址…", onClick: () => safe(customTestTarget, "测速") });
+  items.push({ sep: true });
+  items.push({ label: "TCP 握手（快，仅端口可达）", onClick: () => safe(() => runNodeTest(null, "tcp"), "测速") });
+  return items;
 }
 
 function nodeMenuItems(n) {
   const isOff = nodeDisSet().has(n.name);
   const isDef = STATE?.config?.outlet?.sb_node === n.name;
   return [
-    { label: "测试延迟", onClick: () => safe(() => testOne(n), "测速") },
+    { label: `HTTP 实测（→ ${testTarget().label}）`, onClick: () => safe(() => runNodeTest([n.name], "http"), "测速") },
+    { label: "TCP 握手测速", onClick: () => safe(() => runNodeTest([n.name], "tcp"), "测速") },
     { label: "修改名称", onClick: () => safe(() => renameNode(n), "改名") },
     { label: "分享链接", onClick: () => safe(() => shareNodes([n.name]), "分享") },
     { label: isOff ? "启用此节点" : "停用此节点", onClick: () => safe(() => setDisabled([n.name], !isOff), "切换节点") },
@@ -854,14 +956,8 @@ function renderNodeGrid() {
     card.appendChild(el("div", "nc-addr", `${n.server}:${n.port}`));
 
     const d = delayMap[n.name];
-    let delayEl;
-    if (!d) {
-      delayEl = el("span", "nc-delay", "—");
-    } else if (d.reachable) {
-      delayEl = el("span", `nc-delay ${d.ms < 300 ? "ok" : "warn"}`, `${d.ms}ms`);
-    } else {
-      delayEl = el("span", "nc-delay bad", "TIMEOUT");
-    }
+    const delayEl = el("span", d ? `nc-delay ${delayKind(d)}` : "nc-delay", delayText(d));
+    delayEl.title = delayTitle(d);
     card.appendChild(delayEl);
 
     card.addEventListener("click", (e) => {
@@ -919,7 +1015,9 @@ function renderNodeTable(nodes, sbNode) {
     const d = delayMap[n.name];
     if (d) {
       tTd.textContent = "";
-      tTd.appendChild(pill(d.reachable ? `${d.ms}ms` : "不可达", d.reachable ? (d.ms < 300 ? "ok" : "warn") : "bad"));
+      const p = pill(delayText(d), delayKind(d));
+      p.title = delayTitle(d);
+      tTd.appendChild(p);
     }
     row.appendChild(tTd);
 
@@ -967,32 +1065,9 @@ $("#nodeSource").addEventListener("change", (e) => { nodeState.source = e.target
 $("#btnNodeGrid").addEventListener("click", () => { nodeState.view = "grid"; renderNodes(); });
 $("#btnNodeList").addEventListener("click", () => { nodeState.view = "list"; renderNodes(); });
 
-$("#btnNodeTest").addEventListener("click", () => safe(async () => {
-  const out = $("#subOut"); out.appendChild(el("div", "hint", "正在测速（TCP 连通耗时）…"));
-  const d = await api("/api/subs/test", "POST", {});
-  delayMap = {};
-  (d.results || []).forEach((r) => { delayMap[r.tag] = r; });
-  // 把测速结果写回网格与列表
-  $$("#nodeGrid .node-card").forEach((c) => {
-    const name = c.getAttribute("data-n");
-    const r = delayMap[name];
-    let de = c.querySelector(".nc-delay");
-    if (!de) { de = el("span", "nc-delay"); c.appendChild(de); }
-    if (!r) { de.className = "nc-delay"; de.textContent = "—"; return; }
-    de.className = r.reachable ? `nc-delay ${r.ms < 300 ? "ok" : "warn"}` : "nc-delay bad";
-    de.textContent = r.reachable ? `${r.ms}ms` : "TIMEOUT";
-  });
-  $$("#nodeTbody tr").forEach((row) => {
-    const td = row.querySelector("td[data-name]");
-    if (!td) return;
-    const r = delayMap[td.getAttribute("data-name")];
-    if (!r) return;
-    td.textContent = "";
-    td.appendChild(pill(r.reachable ? `${r.ms}ms` : "不可达", r.reachable ? (r.ms < 300 ? "ok" : "warn") : "bad"));
-  });
-  const bad = (d.results || []).filter((r) => !r.reachable).length;
-  out.appendChild(el("div", "hint", `测速完成：不可达 ${bad} 个（TCP 耗时，真实延迟略高）。`));
-}, "节点测速"));
+$("#btnNodeTest").addEventListener("click", (e) => {
+  Pop.toggle(e.currentTarget, testMenuItems());
+});
 
 /* ---------------- 批量选择 / 批量操作 ---------------- */
 $("#nodeSelAll").addEventListener("change", (e) => {

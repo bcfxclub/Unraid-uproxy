@@ -45,6 +45,11 @@ def _ensure_net() -> None:
     host.docker("network", "connect", NET, _self_name(), timeout=30)
 
 
+# 供测速等「临时容器」复用：它们也要能用容器名互相访问
+def ensure_net() -> None:
+    _ensure_net()
+
+
 def _status(name: str) -> dict:
     r = host.docker("inspect", "-f", "{{.State.Status}}|{{.State.Running}}", name)
     if r["rc"] != 0:

@@ -15,6 +15,7 @@ from . import auth
 from . import health
 from . import host
 from . import log as uplog
+from . import nettest
 from . import outlets
 from . import persist
 from . import probe
@@ -107,6 +108,13 @@ class NodeReq(BaseModel):
     rename: dict = Field(default_factory=dict)   # {from: old_name, to: new_name}
     delete: list[str] = Field(default_factory=list)    # 批量删除节点（进黑名单）
     restore: list[str] = Field(default_factory=list)   # 从黑名单恢复
+
+
+class NodeTestReq(BaseModel):
+    nodes: list[dict] = Field(default_factory=list)   # 空 = 测全部节点
+    mode: str = "auto"      # auto（优先真实 HTTP，环境不支持则降级）/ http / tcp
+    url: str = ""           # 自定义测试目标，空 = Google 204
+    timeout: int = 5000     # 单节点超时（毫秒）
 
 
 @app.exception_handler(Exception)
@@ -386,11 +394,34 @@ def api_subs_fetch(req: SubReq):
     ], "unsupported": parsed["unsupported"], "attempt": got.get("attempt", 1)}
 
 
+@app.get("/api/nodes/test-targets", dependencies=[Depends(guard)])
+def api_node_test_targets():
+    """预置的测速目标站点（前端渲染成菜单项）。"""
+    return {"ok": True, "targets": nettest.targets(), "default": nettest.DEFAULT_TARGET}
+
+
 @app.post("/api/subs/test", dependencies=[Depends(guard)])
-def api_subs_test(req: SubReq):
+def api_subs_test(req: NodeTestReq):
+    """节点测速。
+
+    ``mode=http`` 才是真的「能不能出去」：会起一个一次性 sing-box，
+    让它用每个节点亲自访问 Google/GitHub，量应用层往返耗时；
+    ``mode=tcp`` 只做端口握手，快但没有参考价值。
+    """
     cfg = st.load()
     nodes = req.nodes or cfg.outlet.sb_nodes
-    return {"ok": True, "results": subs.test_nodes(nodes)}
+    r = nettest.test_nodes(nodes, mode=req.mode, url=req.url, timeout_ms=req.timeout)
+    up = sum(1 for x in r["results"] if x.get("reachable"))
+    total = len(r["results"])
+    if total:
+        tag = "HTTP 实测" if r["mode"] == "http" else "TCP 握手测速"
+        target = r["url"] or "节点端口"
+        note = r.get("note") or ""
+        # 只有「降级」这种意外才写进日志，正常提示就不占日志行了
+        extra = f"；{note}" if "降级" in note else ""
+        uplog.append("info" if up else "warn", "nodes",
+                     f"{tag} {total} 个节点：{up} 个可用（目标 {target}）{extra}")
+    return {"ok": True, **r}
 
 
 # --------------------------------------------------------------------------

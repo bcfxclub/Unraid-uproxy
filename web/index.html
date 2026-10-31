@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>uproxy · Unraid 出网加速</title>
-<link rel="stylesheet" href="/static/style.css?v=17">
+<link rel="stylesheet" href="/static/style.css?v=20">
 </head>
 <body>
 
@@ -189,7 +189,7 @@
     </div>
 
     <div class="card">
-      <h2>节点管理 <span class="tag">按订阅来源分组 · 勾选启用 / 选默认出口 / 测速</span></h2>
+      <h2>节点管理 <span class="tag">按订阅来源分组 · 勾选启用 / 选默认出口 / HTTP 实测</span></h2>
       <div class="row wrap">
         <input id="nodeSearch" placeholder="搜索节点…" style="max-width:180px">
         <label class="lbl" style="margin:0">来源</label>
@@ -204,7 +204,7 @@
         <button id="btnNodeDisableSel" class="mini" disabled>停用</button>
         <button id="btnNodeRestore" class="mini" hidden>恢复已删除</button>
         <span class="grow"></span>
-        <button id="btnNodeTest">测试延迟</button>
+        <button id="btnNodeTest" title="HTTP 实测：经每个节点真实访问 Google / GitHub">测速 ▾</button>
         <button id="btnNodeGrid" class="primary" title="网格视图">▦</button>
         <button id="btnNodeList" title="列表视图">☰</button>
       </div>
@@ -212,7 +212,7 @@
       <div class="tablewrap" id="nodeTableWrap">
         <table class="tbl" id="nodeTable">
           <thead>
-            <tr><th style="width:54px">选择</th><th>名称</th><th style="width:70px">状态</th><th style="width:90px">来源</th><th style="width:80px">类型</th><th style="width:90px">测速</th><th style="width:64px">默认</th></tr>
+            <tr><th style="width:54px">选择</th><th>名称</th><th style="width:70px">状态</th><th style="width:90px">来源</th><th style="width:80px">类型</th><th style="width:112px">测速</th><th style="width:64px">默认</th></tr>
           </thead>
           <tbody id="nodeTbody"></tbody>
         </table>
@@ -412,6 +412,6 @@
 </div>
 
 <div id="toast" class="toast"></div>
-<script src="/static/app.js?v=17"></script>
+<script src="/static/app.js?v=20"></script>
 </body>
 </html>

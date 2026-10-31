@@ -356,10 +356,12 @@ table.data th { color: var(--muted); font-weight: 400; }
 .nc-type, .nc-src { font-size: 11px; padding: 1px 7px; border-radius: 6px; background: var(--card-2); color: var(--muted); }
 .nc-src { color: var(--accent); background: rgba(230,182,79,0.10); }
 .nc-addr { font-size: 11px; color: var(--muted); font-family: var(--mono); }
-.nc-delay { font-size: 13px; font-family: var(--mono); color: var(--muted); }
-.nc-delay.ok { color: var(--ok); }
-.nc-delay.warn { color: var(--warn); }
-.nc-delay.bad { color: var(--bad); }
+.nc-delay { font-size: 13px; font-family: var(--mono); color: var(--muted); align-self: flex-start; }
+/* 三种结果做成同一种小胶囊，避免只有慢/失败着色、好看的反而没底色 */
+.nc-delay.ok, .nc-delay.warn, .nc-delay.bad { font-size: 12px; padding: 0 7px; border-radius: 6px; }
+.nc-delay.ok { color: var(--ok); background: var(--ok-soft); }
+.nc-delay.warn { color: var(--warn); background: var(--warn-soft); }
+.nc-delay.bad { color: var(--bad); background: var(--bad-soft); }
 .name-edit {
   width: 100%; background: transparent; border: none; border-bottom: 1px dashed transparent;
   color: var(--text); font-size: 13px; padding: 2px 0; font-family: var(--font);
