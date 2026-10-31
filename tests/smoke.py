@@ -92,8 +92,13 @@ def main() -> int:
     print("\n[2] 生成变更预览")
     plan = targets.plan(cfg)
     keys = [p["key"] for p in plan]
-    check(set(keys) == {"dockerd", "mirror", "ca", "system"}, "四个目标都产出计划")
-    check(all(p["ok"] for p in plan), "全部目标渲染成功")
+    check(set(keys) == {"dockerd", "mirror", "ca", "system", "wgetrc"}, "五个目标都产出计划")
+    # wgetrc 必须挂了宿主机 /etc 才写；没挂时必须标不可用，绝不能写到容器自己的目录里
+    wg = next(p for p in plan if p["key"] == "wgetrc")
+    mounted = wg["path"].startswith(S.HOST_ROOT + "/") and os.path.isdir(os.path.dirname(wg["path"]))
+    check(wg["ok"] == mounted,
+          f"wgetrc 按 /host/etc 是否挂载（{mounted}）正确判定：" + wg["note"])
+    check(all(p["ok"] for p in plan if p["key"] != "wgetrc"), "其余目标渲染成功")
     check(next(p for p in plan if p["key"] == "dockerd")["changed"], "dockerd 检测到需要变更")
 
     print("\n[3] 应用变更")
@@ -147,8 +152,11 @@ def main() -> int:
     print("\n[7] 还原")
     backups = H.list_backups()
     check(len(backups) > 0, f"产生了 {len(backups)} 份备份")
-    rc_bak = next((b for b in backups if b["file"].startswith("rc.docker.")), None)
-    check(rc_bak is not None, "存在 rc.docker 备份")
+    # 同一文件可能有多份备份，list_backups 按时间倒序返回，
+    # 还原要用最旧那份（uproxy 改动前），备份名带毫秒所以按文件名升序即时间升序
+    rc_all = [b for b in backups if b["file"].startswith("rc.docker.")]
+    rc_bak = sorted(rc_all, key=lambda b: b["file"])[0] if rc_all else None
+    check(rc_bak is not None, f"存在 rc.docker 备份（共 {len(rc_all)} 份）")
     if rc_bak:
         H.restore(rc_bak["path"], S.resolve("rc_docker"))
         check(r(RC_REL) == RC_BODY, "rc.docker 已还原为原始内容")

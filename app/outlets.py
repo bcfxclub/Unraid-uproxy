@@ -24,6 +24,15 @@ WARP_NAME = "uproxy-warp"
 SB_NAME = "uproxy-singbox"
 SB_CONF_DIR = S.STATE_DIR / "singbox"
 
+# docker 命令行的常见落点（PATH 查不到时按此兜底）
+_DOCKER_BIN_CANDIDATES = (
+    "/usr/local/bin/docker",
+    "/usr/bin/docker",
+    "/bin/docker",
+    "/usr/local/sbin/docker",
+    "/usr/sbin/docker",
+)
+
 # WARP 注册接口下发的 endpoint 就是这个域名；它在部分网络里会被解析到黑洞 IP
 WARP_ENDPOINT_DOMAIN = "engage.cloudflareclient.com"
 # 合法的 WARP 接入点网段（CF 自持）
@@ -69,8 +78,8 @@ def _status(name: str) -> dict:
 # --------------------------------------------------------------------------
 def warp_start(cfg: st.AppCfg) -> dict:
     if not docker_available():
-        return {"ok": False, "nodocker": True,
-                "message": "当前环境没有 docker 命令行（本程序需在 Unraid / Linux + Docker 上运行），无法启动 WARP 容器"}
+        return {"ok": False, "nodocker": True, "diag": docker_diag(),
+                "message": nodocker_message("启动 WARP 容器")}
     _ensure_net()
     host.docker("rm", "-f", WARP_NAME, timeout=30)
     port = cfg.outlet.warp_port
@@ -103,8 +112,8 @@ def warp_start(cfg: st.AppCfg) -> dict:
 
 def warp_stop() -> dict:
     if not docker_available():
-        return {"ok": False, "nodocker": True,
-                "message": "当前环境没有 docker 命令行，无法操作 WARP 容器"}
+        return {"ok": False, "nodocker": True, "diag": docker_diag(),
+                "message": nodocker_message("操作 WARP 容器")}
     r = host.docker("rm", "-f", WARP_NAME, timeout=60)
     return {"ok": r["rc"] == 0, "message": "已移除 WARP container" if r["rc"] == 0 else (r["err"] or "")[:400]}
 
@@ -451,19 +460,72 @@ def _run_with_conf(name: str, image: str, conf: dict, cmd: list[str],
 
 
 def docker_path() -> str:
-    """docker 命令行在哪。找不到说明当前不是真正的部署环境（比如本地预览）。"""
-    return shutil.which("docker") or ""
+    """docker 命令行在哪。找不到说明当前不是真正的部署环境（比如本地预览）。
+
+    先看 PATH，再按常见绝对路径兜底：有些镜像里 /usr/local/sbin 之类不在 PATH 上，
+    只靠 shutil.which 会误判成「没有 docker」，把真机也当成预览环境。
+    """
+    p = shutil.which("docker")
+    if p:
+        return p
+    for c in _DOCKER_BIN_CANDIDATES:
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return ""
 
 
 def docker_available() -> bool:
     return bool(docker_path())
 
 
+def docker_diag() -> dict:
+    """把「docker 到底哪儿不通」拆开说清楚，别再一律报『没有 docker 命令行』。
+
+    cli      镜像里找不找得到 docker 命令
+    sock     宿主机 /var/run/docker.sock 有没有挂进来
+    daemon   docker 命令能不能真的连上守护进程
+    """
+    cli = docker_path()
+    sock_path = S.DOCKER_SOCK
+    sock_ok = os.path.exists(sock_path)
+    info = {"cli": bool(cli), "path": cli or "(未找到)", "sock": sock_ok,
+            "sock_path": sock_path, "daemon": False, "detail": ""}
+    if not cli:
+        info["detail"] = (
+            "容器里没有 docker 命令行（镜像构建时未装成功）。"
+            "请重新拉取最新镜像：docker pull ghcr.io/bcfxclub/uproxy:latest"
+        )
+        return info
+    if not sock_ok:
+        info["detail"] = (
+            f"docker 命令在（{cli}），但找不到 {sock_path}。"
+            "请在容器的路径映射里把 /var/run/docker.sock 挂进来"
+            "（Unraid 里要选「设备」类型，不是「路径」）。"
+        )
+        return info
+    r = host.run([cli, "version", "--format", "{{.Server.Version}}"], timeout=20)
+    if r["rc"] == 0 and (r["out"] or "").strip():
+        info["daemon"] = True
+        info["detail"] = "docker 可用，守护进程版本 " + r["out"].strip()
+    else:
+        info["detail"] = (
+            f"docker 命令在（{cli}），{sock_path} 也已挂载，但连不上守护进程："
+            f"{(r['err'] or r['out'] or '未知错误')[:200]}。"
+            "检查该套接字是否以「设备」方式挂载、以及容器是否对它有读写权限。"
+        )
+    return info
+
+
+def nodocker_message(action: str = "启动出口") -> str:
+    d = docker_diag()
+    return f"无法{action}：{d['detail']}"
+
+
 def sb_check(cfg: st.AppCfg, conf: dict | None = None) -> dict:
     """用目标镜像自带的 `sing-box check` 先验证一遍配置，避免起一个秒退的容器。"""
     if not docker_available():
-        return {"ok": False, "nodocker": True,
-                "message": "当前环境没有 docker 命令行，无法校验/启动 sing-box"}
+        return {"ok": False, "nodocker": True, "diag": docker_diag(),
+                "message": nodocker_message("校验/启动 sing-box")}
     conf = conf if conf is not None else _sb_config(cfg)
     r = _run_with_conf(f"{SB_NAME}-check", cfg.outlet.sb_image, conf,
                        ["check", "-c", CONF_IN_CONTAINER],
@@ -471,15 +533,15 @@ def sb_check(cfg: st.AppCfg, conf: dict | None = None) -> dict:
     msg = (r.get("err") or r.get("out") or "").strip()
     # 127 = 命令都没跑起来；这不是「配置被拒」，别把用户引到错误方向
     if r["rc"] == 127 or "WinError 2" in msg:
-        return {"ok": False, "nodocker": True,
-                "message": "当前环境没有 docker 命令行，无法校验/启动 sing-box"}
+        return {"ok": False, "nodocker": True, "diag": docker_diag(),
+                "message": nodocker_message("校验/启动 sing-box")}
     return {"ok": r["rc"] == 0, "message": msg[:800]}
 
 
 def sb_start(cfg: st.AppCfg) -> dict:
     if not docker_available():
-        return {"ok": False, "nodocker": True,
-                "message": "当前环境没有 docker 命令行，规则已保存，部署到 Unraid 后重启出口即可生效"}
+        return {"ok": False, "nodocker": True, "diag": docker_diag(),
+                "message": nodocker_message("启动 sing-box 出口") + "；规则已保存，修好后重启出口即可生效"}
     _ensure_net()
     conf = _sb_config(cfg)
 

@@ -54,6 +54,13 @@ CANDIDATES: dict[str, list[str]] = {
         hpath("etc/profile.d/uproxy.sh"),
         "/etc/profile.d/uproxy.sh",
     ],
+    # 系统 wget 的全局代理配置。Unraid 装插件（plg/txz）走的是 wget，
+    # 它既不读 CA 的 proxy.cfg，也不读 profile.d（WebUI 后台不是登录 shell），
+    # 只有 /etc/wgetrc 才能管到——CA 商店配了代理但插件仍下载失败就差这个文件。
+    "wgetrc": [
+        hpath("etc/wgetrc"),
+        "/etc/wgetrc",
+    ],
 }
 
 OVERRIDE_ENV: dict[str, str] = {
@@ -62,6 +69,7 @@ OVERRIDE_ENV: dict[str, str] = {
     "ca_proxy": "UPX_CA_PROXY",
     "go_file": "UPX_GO_FILE",
     "profile_env": "UPX_PROFILE_ENV",
+    "wgetrc": "UPX_WGETRC",
 }
 
 

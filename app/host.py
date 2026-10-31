@@ -84,8 +84,17 @@ def backup(path: str) -> str | None:
     if not os.path.exists(path):
         return None
     S.ensure_dirs()
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    dst = S.BACKUP_DIR / f"{_safe(os.path.basename(path))}.{ts}.bak"
+    now = datetime.now()
+    # 文件名带毫秒：只到秒的话，同一秒内的两次写入会互相覆盖，
+    # 「还原到最初备份」拿到的其实是改动后的内容；而且同秒备份排序不分先后，
+    # 会让 reset 挑错备份。带毫秒后字典序就等于时间先后。
+    ts = now.strftime("%Y%m%d-%H%M%S") + f"-{now.microsecond // 1000:03d}"
+    base = _safe(os.path.basename(path))
+    dst = S.BACKUP_DIR / f"{base}.{ts}.bak"
+    n = 0
+    while dst.exists():   # 兜底：极端情况下仍然撞名就加序号
+        n += 1
+        dst = S.BACKUP_DIR / f"{base}.{ts}-{n}.bak"
     shutil.copy2(path, dst)
     _gc()
     return str(dst)

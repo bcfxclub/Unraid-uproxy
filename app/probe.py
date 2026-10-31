@@ -63,6 +63,23 @@ def docker_server_version() -> str:
     return r["out"] if r["rc"] == 0 else ""
 
 
+def docker_health() -> dict:
+    """docker 到底通不通，拆成「命令在不在 / sock 挂没挂 / 守护进程能不能连」三件事。
+
+    以前体检只显示一个「未识别」，用户看不出是镜像缺 CLI 还是 sock 没挂。
+    """
+    from . import outlets  # 延迟导入：outlets 依赖链更重，且避免与 probe 形成循环
+
+    d = outlets.docker_diag()
+    if d["daemon"]:
+        d["state"] = "ok"
+    elif d["cli"] and d["sock"]:
+        d["state"] = "warn"
+    else:
+        d["state"] = "bad"
+    return d
+
+
 def snapshot() -> dict:
     cfg = st.load()
     go = host.read(S.resolve("go_file"))
@@ -71,6 +88,7 @@ def snapshot() -> dict:
         "paths": {k: _stat(S.resolve(k)) for k in KEYS},
         "unraid": unraid_version(),
         "docker_version": docker_server_version(),
+        "docker": docker_health(),
         "dockerd_proxy": dockerd_proxy_line(),
         "mirrors": effective_mirrors(),
         "ca_proxy": host.read(S.resolve("ca_proxy")).strip(),

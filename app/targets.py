@@ -232,6 +232,70 @@ def render_system(cfg: st.AppCfg) -> dict:
     }
 
 
+# --------------------------------------------------------------------------
+# 系统 wget 代理 /etc/wgetrc
+#
+# 为什么单独有这一项：Unraid 装插件（plg / txz）走的是系统 wget，
+# 它既不读 CA 商店的 proxy.cfg，也不读 /etc/profile.d（WebUI 后台不是登录 shell）。
+# 所以「CA 代理已配好」但插件依然 download failure，差的就是这个文件。
+# --------------------------------------------------------------------------
+WGETRC_BEGIN = "# >>> uproxy managed >>>"
+WGETRC_END = "# <<< uproxy managed <<<"
+
+
+def _strip_wgetrc_block(content: str) -> str:
+    """去掉上一轮写的托管块，保留 Unraid 原有的 wgetrc 内容。"""
+    if not content:
+        return ""
+    out = content
+    while WGETRC_BEGIN in out and WGETRC_END in out:
+        i = out.index(WGETRC_BEGIN)
+        j = out.index(WGETRC_END) + len(WGETRC_END)
+        out = out[:i] + out[j:]
+    return out.rstrip() + "\n" if out.strip() else ""
+
+
+def render_wgetrc(cfg: st.AppCfg) -> dict:
+    path = S.resolve("wgetrc")
+    parent = os.path.dirname(path)
+    # 必须挂了宿主机 /etc 才能写；没挂就写会落到容器自己的目录里，看着成功其实没生效
+    mounted = path.startswith(S.HOST_ROOT + "/") and os.path.isdir(parent)
+    if not mounted:
+        return {
+            "key": "wgetrc", "title": "系统 wget 代理（装插件/下载 txz）", "path": path,
+            "exists": False, "changed": False,
+            "current": "(未挂载)", "proposed": "(需挂载宿主机 /etc)",
+            "needs_restart": False, "ok": False,
+            "note": "容器没挂载宿主机 /etc，无法写入。重建容器时加一条映射：-v /etc:/host/etc",
+            "_content": None,
+        }
+
+    cur = host.read(path)
+    url = outlet_url(cfg)
+    base = _strip_wgetrc_block(cur)
+    if url:
+        proposed = (
+            base
+            + f"{WGETRC_BEGIN}\n"
+            + f"use_proxy = on\n"
+            + f"http_proxy = {url}\n"
+            + f"https_proxy = {url}\n"
+            + f"no_proxy = {cfg.no_proxy}\n"
+            + f"{WGETRC_END}\n"
+        )
+    else:
+        proposed = base
+    changed = proposed.strip() != cur.strip()
+    return {
+        "key": "wgetrc", "title": "系统 wget 代理（装插件/下载 txz）", "path": path,
+        "exists": os.path.exists(path), "changed": changed,
+        "current": cur.strip() or "(空/不存在)", "proposed": proposed.strip() or "(清空)",
+        "needs_restart": False, "ok": True,
+        "note": "对 wget 立即生效（装插件、下载 txz 走它）；不改动 Unraid 原有的 wgetrc 内容",
+        "_content": proposed,
+    }
+
+
 def _q(v: str) -> str:
     return "'" + v.replace("'", "'\\''") + "'"
 
@@ -262,6 +326,7 @@ RENDERERS = {
     "mirror": render_mirror,
     "ca": render_ca,
     "system": render_system,
+    "wgetrc": render_wgetrc,
 }
 
 TITLES = {
@@ -269,6 +334,7 @@ TITLES = {
     "mirror": "镜像加速",
     "ca": "CA 商店代理",
     "system": "系统环境变量",
+    "wgetrc": "系统 wget 代理",
 }
 
 
@@ -356,7 +422,9 @@ def reset_target(key: str, cfg) -> dict:
     base = host._safe(os.path.basename(path))         # rc.docker / daemon.json / proxy.cfg / go / uproxy.sh
     cands = [b for b in host.list_backups() if b["file"].startswith(base + ".")]
     if cands:
-        cands.sort(key=lambda b: b["mtime"])          # 升序：最旧 = 改动前
+        # 按文件名升序 = 按时间先后（备份名带毫秒），取最旧那份即 uproxy 改动前的内容。
+        # 不能按 mtime 排：它只精确到秒，同一秒内的多份备份分不出先后，会挑错。
+        cands.sort(key=lambda b: b["file"])
         host.restore(cands[0]["path"], path)
         return {"status": "restored", "path": path, "backup": cands[0]["file"],
                 "note": "已还原到 uproxy 改动前的最初备份"}
@@ -383,6 +451,16 @@ def reset_target(key: str, cfg) -> dict:
             host.write_file(path, "")                 # 清空：uproxy 不写即默认
             return {"status": "written", "path": path, "note": "已清空 uproxy 写入的内容"}
         return {"status": "unchanged", "path": path, "note": "文件不存在，无需处理"}
+    if key == "wgetrc":
+        # 只撤托管块，Unraid 自带的 wgetrc 原内容要留着
+        cur = host.read(path)
+        if not cur.strip():
+            return {"status": "unchanged", "path": path, "note": "文件为空，无需处理"}
+        new = _strip_wgetrc_block(cur)
+        if new.strip() == cur.strip():
+            return {"status": "unchanged", "path": path, "note": "未发现 uproxy 写入的 wget 代理配置"}
+        host.write_file(path, new)
+        return {"status": "written", "path": path, "note": "已移除 uproxy 写入的 wget 代理配置（保留原内容）"}
     if key == "rc_docker":
         return _strip_rc_docker(path)
     return {"status": "skipped", "path": path, "note": "暂不支持该目标的恢复"}

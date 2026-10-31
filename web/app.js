@@ -373,6 +373,8 @@ function renderProbe(p) {
   const rows = [
     ["Unraid 版本", p.unraid || "未识别"],
     ["Docker 版本", p.docker_version || "未识别"],
+    // docker 不通时把原因说清楚：缺 CLI / sock 没挂 / 连不上守护进程
+    ["Docker 连通性", (p.docker && p.docker.detail) || "（未知）"],
     ["dockerd 当前代理", p.dockerd_proxy || "（无）"],
     ["生效的镜像源", (p.mirrors || []).join("\n") || "（无）"],
     ["CA 商店代理", p.ca_proxy || "（无）"],
@@ -457,6 +459,7 @@ function renderConfig(c) {
   $("#t-mirror").checked = !!c.targets.mirror;
   $("#t-ca").checked = !!c.targets.ca;
   $("#t-system").checked = !!c.targets.system;
+  $("#t-wgetrc").checked = !!c.targets.wgetrc;
   $("#allowRestart").checked = !!c.allow_restart_docker;
   $("#emhttpProxy").checked = !!c.emhttp_proxy;
 
@@ -506,7 +509,7 @@ bindSave("#inNoProxy", (n) => ({ no_proxy: n.value.trim() }));
 bindSave("#inMirrors", (n) => ({ mirrors: n.value.split("\n").map((s) => s.trim()).filter(Boolean) }));
 bindSave("#allowRestart", (n) => ({ allow_restart_docker: n.checked }));
 bindSave("#emhttpProxy", (n) => ({ emhttp_proxy: n.checked }));
-["dockerd", "mirror", "ca", "system"].forEach((k) => {
+["dockerd", "mirror", "ca", "system", "wgetrc"].forEach((k) => {
   bindSave(`#t-${k}`, (n) => ({ targets: { [k]: n.checked } }));
 });
 

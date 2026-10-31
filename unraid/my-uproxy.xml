@@ -30,6 +30,7 @@
   <Config Name="Docker 配置目录" Target="/host/etc/docker" Default="/etc/docker" Mode="rw" Description="读写 daemon.json（registry-mirrors）" Type="Path" Display="always" Required="true" Mask="false">/etc/docker</Config>
   <Config Name="Docker 启动脚本目录" Target="/host/usr/local/etc/rc.d" Default="/usr/local/etc/rc.d" Mode="rw" Description="读写 rc.docker（dockerd 代理注入点）" Type="Path" Display="always" Required="true" Mask="false">/usr/local/etc/rc.d</Config>
   <Config Name="系统 profile 目录" Target="/host/etc/profile.d" Default="/etc/profile.d" Mode="rw" Description="读写系统代理环境变量" Type="Path" Display="always" Required="true" Mask="false">/etc/profile.d</Config>
+  <Config Name="系统 /etc 目录" Target="/host/etc" Default="/etc" Mode="rw" Description="写 /etc/wgetrc：让 Unraid 装插件/下载 txz 也走代理（CA 商店的 proxy.cfg 管不到插件安装）" Type="Path" Display="always" Required="false" Mask="false">/etc</Config>
   <Config Name="工具状态与备份" Target="/config" Default="/mnt/user/appdata/uproxy/state" Mode="rw" Description="配置、sing-box 配置与自动备份（务必放在阵列/缓存上以持久保存）" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/uproxy/state</Config>
   <Config Name="Docker 套接字" Target="/var/run/docker.sock" Default="/var/run/docker.sock" Mode="rw" Description="用于编排 WARP / sing-box 出口容器、重启 Docker 服务" Type="Device" Display="always" Required="true" Mask="false">/var/run/docker.sock</Config>
   <Config Name="访问口令" Target="UPX_TOKEN" Default="" Mode="" Description="强烈建议设置：同网段任何人都能改你的 Docker 配置。留空表示不校验" Type="Variable" Display="always" Required="false" Mask="false"></Config>

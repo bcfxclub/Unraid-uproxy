@@ -39,10 +39,13 @@ docker run -d --name uproxy --restart unless-stopped \
   -v /etc/docker:/host/etc/docker \
   -v /usr/local/etc/rc.d:/host/usr/local/etc/rc.d \
   -v /etc/profile.d:/host/etc/profile.d \
+  -v /etc:/host/etc \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /mnt/user/appdata/uproxy/state:/config \
   ghcr.io/bcfxclub/uproxy:latest
 ```
+
+> `/etc:/host/etc` 用于写 `/etc/wgetrc`，让 Unraid **装插件 / 下载 txz** 也走代理（CA 商店的 `proxy.cfg` 管不到插件安装）。不需要这项功能可以不挂。
 
 > 更新只需 `docker pull ghcr.io/bcfxclub/uproxy:latest` 重建容器（配置全在 `state` 卷，不丢）。
 > 国内拉 GHCR 若慢，本项目本身就干这个的：先用现有出口把 dockerd 配好再 pull。
@@ -127,6 +130,7 @@ docker images uproxy:latest           # 确认镜像已存在
 | 路径 /host/etc/docker | 宿主 `/etc/docker`（读写） |
 | 路径 /host/usr/local/etc/rc.d | 宿主 `/usr/local/etc/rc.d`（读写） |
 | 路径 /host/etc/profile.d | 宿主 `/etc/profile.d`（读写） |
+| 路径 /host/etc | 宿主 `/etc`（读写，**选填**：要用「系统 wget 代理」让装插件走代理时必挂） |
 | 路径 /config | 宿主 `/mnt/user/appdata/uproxy/state`（读写，**务必挂此卷持久化**） |
 | 设备 /var/run/docker.sock | 宿主 `/var/run/docker.sock`（**选「设备」类型，不是「路径」**） |
 | 变量 UPX_HOST_ROOT | `/host` |
@@ -183,6 +187,7 @@ docker run -d --name uproxy --restart unless-stopped \
   -v /etc/docker:/host/etc/docker \
   -v /usr/local/etc/rc.d:/host/usr/local/etc/rc.d \
   -v /etc/profile.d:/host/etc/profile.d \
+  -v /etc:/host/etc \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$STATE:/config" \
   uproxy:latest
@@ -225,6 +230,23 @@ cd repo && ./update.sh
 - **`docker build` 拉不动基础镜像**（报错 `lookup xxx: no such host`）：daemon.json 里的镜像源域名失效。先 `./fix-mirror.sh` 再重试；都不通就给 dockerd 配 `http_proxy` 走出口。
 - **WebUI 打不开**：确认 Unraid 防火墙/端口映射，`docker ps` 看 uproxy 是否在跑、`8765` 是否映射。
 - **密码不对 / 登不进**：若从没在界面改过密码，重部署后密码以 `install.sh` 打印的为准（已被备份到 `state/.deploy_pw`）；若改过界面密码则永远以 `auth.json` 为准。忘记可删 `state/auth.json` 并重启容器回退到环境变量密码。
+
+- **启动 sing-box / WARP 报「没有 docker 命令行」**：体检页「Docker 连通性」会直接告诉你是哪一种：
+  - *容器里没有 docker 命令行* → 镜像构建时 CLI 没装成功，重新拉最新镜像：`docker pull ghcr.io/bcfxclub/uproxy:latest`；
+  - *找不到 /var/run/docker.sock* → 容器的 docker 套接字没挂，或挂成了「路径」类型（必须是「设备」）；
+  - *连不上守护进程* → 检查该套接字权限是否可读写。
+
+- **CA 商店代理已配好，但装插件仍 `download failure: Network failure`**：Unraid 装插件（plg / txz）走的是系统 `wget`，它既不读 CA 的 `proxy.cfg`，也不读 `/etc/profile.d`（WebUI 后台不是登录 shell）。解决办法二选一：
+  1. 容器加挂 `-v /etc:/host/etc`，然后在「下发」页勾选**系统 wget 代理**并应用，uProxy 会写 `/etc/wgetrc`（只追加托管块，不动 Unraid 原有内容）；
+  2. 直接在 Unraid 终端追加：
+     ```bash
+     cat >> /etc/wgetrc <<'EOF'
+     use_proxy = on
+     http_proxy = http://192.168.50.15:20171
+     https_proxy = http://192.168.50.15:20171
+     EOF
+     ```
+  > 改完立即生效，无需重启。想还原就删掉这几行，或在 uProxy 备份页还原 `wgetrc`。
 
 ### 五、发布到 Docker Hub（维护者）
 

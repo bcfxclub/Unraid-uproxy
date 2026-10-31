@@ -100,11 +100,13 @@ def _image() -> str:
 
 def _docker_ready() -> tuple[bool, str]:
     """先确认 Docker 能用，免得在 create 上白等（开发机没有 docker 命令）。"""
+    if not outlets.docker_available():
+        return False, outlets.nodocker_message("起临时 sing-box 做 HTTP 实测")
     r = host.docker("info", "--format", "{{.ServerVersion}}", timeout=20)
     if r["rc"] == 0:
         return True, ""
     if r["rc"] == 127:
-        return False, "本机没有 docker 命令行，无法起临时 sing-box 做 HTTP 实测"
+        return False, outlets.nodocker_message("起临时 sing-box 做 HTTP 实测")
     msg = (r["err"] or r["out"] or "未知原因").replace("\n", " ")[:200]
     return False, f"Docker 不可用（{msg}）"
 

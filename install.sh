@@ -106,6 +106,7 @@ if [ "$OK" != "1" ]; then
     -v /etc/docker:/host/etc/docker \
     -v /usr/local/etc/rc.d:/host/usr/local/etc/rc.d \
     -v /etc/profile.d:/host/etc/profile.d \
+    -v /etc:/host/etc \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "${STATE}:/config" \
     uproxy:latest
