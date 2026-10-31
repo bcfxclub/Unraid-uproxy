@@ -231,10 +231,16 @@ cd repo && ./update.sh
 - **WebUI 打不开**：确认 Unraid 防火墙/端口映射，`docker ps` 看 uproxy 是否在跑、`8765` 是否映射。
 - **密码不对 / 登不进**：若从没在界面改过密码，重部署后密码以 `install.sh` 打印的为准（已被备份到 `state/.deploy_pw`）；若改过界面密码则永远以 `auth.json` 为准。忘记可删 `state/auth.json` 并重启容器回退到环境变量密码。
 
-- **启动 sing-box / WARP 报「没有 docker 命令行」**：体检页「Docker 连通性」会直接告诉你是哪一种：
-  - *容器里没有 docker 命令行* → 镜像构建时 CLI 没装成功，重新拉最新镜像：`docker pull ghcr.io/bcfxclub/uproxy:latest`；
-  - *找不到 /var/run/docker.sock* → 容器的 docker 套接字没挂，或挂成了「路径」类型（必须是「设备」）；
-  - *连不上守护进程* → 检查该套接字权限是否可读写。
+- **sing-box / WARP 启动不了**：出口现在在容器内以**进程**方式运行（不再依赖宿主 docker 编排子容器）。报「未找到 sing-box 二进制」说明镜像版本旧，重新拉最新镜像即可：
+  `docker pull ghcr.io/bcfxclub/uproxy:latest`（或 `docker pull bcfx/uproxy:latest`）。
+  WARP 若提示「端口未就绪 / 需要 NET_ADMIN」，确认容器有 `NET_ADMIN` 能力且宿主机已加载 wireguard 内核模块（Unraid 6.10+ 自带）。
+
+- **Unraid 7.0+：用官方「出站代理管理器」接管（推荐）**：uproxy 启动 sing-box / WARP 后，
+  在「出口」页底部「代理端点」卡片复制地址（形如 `http://<Unraid-IP>:7890`），
+  到 **设置 → 出站代理管理器** 添加代理（名称自定义、URL 填该地址）→ 应用 → 选中再应用，
+  Unraid 的系统出网（应用商店 / 更新检查 / docker pull / 装插件）就会自动走代理。
+  这种方式比手改配置文件稳，系统升级也不丢。仍想用文件注入的 6.x 系统，继续用「下发」页即可。
+  代理端口默认 `7890`（sing-box）与 `9091`（WARP），需映射到宿主（模板/compose 已默认发布）。
 
 - **CA 商店代理已配好，但装插件仍 `download failure: Network failure`**：Unraid 装插件（plg / txz）走的是系统 `wget`，它既不读 CA 的 `proxy.cfg`，也不读 `/etc/profile.d`（WebUI 后台不是登录 shell）。解决办法二选一：
   1. 容器加挂 `-v /etc:/host/etc`，然后在「下发」页勾选**系统 wget 代理**并应用，uProxy 会写 `/etc/wgetrc`（只追加托管块，不动 Unraid 原有内容）；
@@ -310,9 +316,9 @@ docker push bcfx/uproxy:1.0.0
 - **进页面就有延迟，默认走 TCP 握手**：打开页面会自动对全部节点做一轮 TCP 握手，
   胶囊上直接出数字，不用先点测速；「测速」按钮默认也是 TCP 握手（3 秒超时，快、不起容器）。
   想看节点**能不能真正出网**，再点 **「目标 ▾」** 换成 Google / GitHub / Cloudflare / 自定义地址——
-  这个菜单**只选不跑**，选完再点旁边的 **「测速」** 才开始。HTTP 实测会临时起一个一次性 sing-box 容器，
-  让每个节点各自真实访问目标站点，量到的是 HTTP 状态码 + 往返耗时；测完容器立即删除，
-  不影响正在运行的出口。拿不到 Docker 时自动降级为 TCP 握手，原因只写在提示条和胶囊的悬停说明里。
+  这个菜单**只选不跑**，选完再点旁边的 **「测速」** 才开始。HTTP 实测会临时起一个一次性 sing-box 进程，
+  让每个节点各自真实访问目标站点，量到的是 HTTP 状态码 + 往返耗时；测完进程立即退出，
+  不影响正在运行的出口。拿不到 sing-box 二进制时自动降级为 TCP 握手，原因只写在提示条和胶囊的悬停说明里。
 - **测速后按延迟排序**：延迟最低的排最前，**超时 / 失败的垫底**，没测过的排在超时之后并保持原有相对顺序。
   排序结果存进 `outlet.sb_order`，重启、重新同步订阅、刷新页面都不会乱；重新测一次就按新结果重排一次。
   目标菜单最底下一项可以关掉这个行为（关闭后测速只更新胶囊、不动顺序）。

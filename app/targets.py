@@ -28,26 +28,33 @@ RESTARTER_IMAGE = os.environ.get("UPX_RESTARTER_IMAGE", "alpine:3.20")
 # 出口地址解析
 # --------------------------------------------------------------------------
 def outlet_url(cfg: st.AppCfg) -> str:
-    """给 dockerd / 系统环境变量用的正向代理地址（http 优先，兼容 socks5）。"""
+    """给 dockerd / 系统环境变量用的正向代理地址（http 优先，兼容 socks5）。
+
+    出口已在容器内以进程方式运行，并把端口 publish 到宿主，
+    因此宿主侧用回环地址 ``127.0.0.1:<port>`` 即可访问（不依赖容器名 / 自定义网络）。
+    """
     o = cfg.outlet
     if o.mode == "manual":
         return (o.http or o.socks or "").strip()
     if o.mode == "warp":
-        return f"http://uproxy-warp:{o.warp_port}"
+        return f"http://127.0.0.1:{o.warp_port}"
     if o.mode == "singbox":
-        return f"http://uproxy-singbox:{o.sb_port}"
+        return f"http://127.0.0.1:{o.sb_port}"
     return ""
 
 
 def ca_proxy_url(cfg: st.AppCfg) -> str:
-    """CA 商店 proxy.cfg 用的地址，socks5 优先（CA 对 socks5 支持更好）。"""
+    """CA 商店 proxy.cfg 用的地址，socks5 优先（CA 对 socks5 支持更好）。
+
+    sing-box 的 mixed 入站同时支持 HTTP 与 SOCKS5，同一端口即可。
+    """
     o = cfg.outlet
     if o.mode == "manual":
         return (o.socks or o.http or "").strip()
     if o.mode == "warp":
-        return f"socks5://uproxy-warp:{o.warp_port}"
+        return f"socks5://127.0.0.1:{o.warp_port}"
     if o.mode == "singbox":
-        return f"socks5://uproxy-singbox:{o.sb_port}"
+        return f"socks5://127.0.0.1:{o.sb_port}"
     return ""
 
 

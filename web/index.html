@@ -295,6 +295,14 @@
         <div id="sbOut" class="out"></div>
       </div>
     </div>
+
+    <div class="card">
+      <h2>代理端点 <span class="tag">给 Unraid 7.0+ 出站代理管理器用</span></h2>
+      <p class="hint">出口启动后，把下面这个地址填到 <b>设置 → 出站代理管理器</b>（添加代理：名称随便、URL 填地址 → 应用 → 再选中它点应用）。
+      Unraid 的系统出网（应用商店 / 更新检查 / docker pull / 装插件）就会自动走这个代理，比手改配置文件稳，升级也不丢。</p>
+      <div id="epList" class="out"></div>
+      <p class="hint" id="epNone" style="display:none">还没有运行中的出口。先在上面选一种出口并启动，这里会显示可复制的代理地址。</p>
+    </div>
   </section>
 
   <!-- ============ 订阅 ============ -->

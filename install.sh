@@ -96,6 +96,10 @@ if [ "$OK" != "1" ]; then
     --name uproxy \
     --restart unless-stopped \
     -p "${PORT}:8765" \
+    -p 7890:7890 \
+    -p 9091:9091 \
+    --cap-add NET_ADMIN \
+    --device /dev/net/tun:/dev/net/tun \
     -e "UPX_HOST_ROOT=/host" \
     -e "UPX_STATE_DIR=/config" \
     -e "TZ=Asia/Shanghai" \

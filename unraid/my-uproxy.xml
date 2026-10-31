@@ -13,12 +13,14 @@
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
   <Support/>
-  <Overview>Unraid 出网加速编排工具。把代理/镜像源统一下发到 dockerd、registry-mirrors、CA 应用商店与系统环境变量，并负责备份、开机重放与一键还原。不改动容器网络，不干扰 PT。</Overview>
+  <Overview>Unraid 出网加速编排工具。sing-box / WARP 在本容器内作为进程直接运行，监听代理端口（7890=sing-box，9091=WARP），
+并把端口发布到宿主。Unraid 7.0+ 推荐：设置 → 出站代理管理器，把代理地址填成 http://[IP]:7890（或 9091）即可让系统出网走代理；
+6.x 系统可继续用本工具的「下发」把代理写入 dockerd / CA 商店 / wgetrc。自带备份、开机重放与一键还原。</Overview>
   <Category>Tools:</Category>
   <WebUI>http://[IP]:[PORT:8765]/</WebUI>
   <TemplateURL/>
   <Icon/>
-  <ExtraParams/>
+  <ExtraParams>--cap-add NET_ADMIN --device /dev/net/tun</ExtraParams>
   <PostArgs/>
   <CPUset/>
   <DateInstalled/>
@@ -26,13 +28,15 @@
   <DonateLink/>
   <Requires/>
   <Config Name="WebUI 端口" Target="8765" Default="8765" Mode="tcp" Description="Web 管理界面端口" Type="Port" Display="always" Required="true" Mask="false">8765:8765</Config>
+  <Config Name="sing-box 代理端口" Target="7890" Default="7890" Mode="tcp" Description="订阅节点出口的 HTTP/SOCKS 代理端口（Unraid 7.0+ 出站代理管理器指向这里）" Type="Port" Display="always" Required="false" Mask="false">7890:7890</Config>
+  <Config Name="WARP 代理端口" Target="9091" Default="9091" Mode="tcp" Description="WARP 出口的 HTTP/SOCKS 代理端口" Type="Port" Display="always" Required="false" Mask="false">9091:9091</Config>
   <Config Name="U盘配置 /boot" Target="/host/boot" Default="/boot" Mode="rw" Description="读写 U 盘配置：开机脚本 go 与 CA 商店 proxy.cfg" Type="Path" Display="always" Required="true" Mask="false">/boot</Config>
   <Config Name="Docker 配置目录" Target="/host/etc/docker" Default="/etc/docker" Mode="rw" Description="读写 daemon.json（registry-mirrors）" Type="Path" Display="always" Required="true" Mask="false">/etc/docker</Config>
   <Config Name="Docker 启动脚本目录" Target="/host/usr/local/etc/rc.d" Default="/usr/local/etc/rc.d" Mode="rw" Description="读写 rc.docker（dockerd 代理注入点）" Type="Path" Display="always" Required="true" Mask="false">/usr/local/etc/rc.d</Config>
   <Config Name="系统 profile 目录" Target="/host/etc/profile.d" Default="/etc/profile.d" Mode="rw" Description="读写系统代理环境变量" Type="Path" Display="always" Required="true" Mask="false">/etc/profile.d</Config>
   <Config Name="系统 /etc 目录" Target="/host/etc" Default="/etc" Mode="rw" Description="写 /etc/wgetrc：让 Unraid 装插件/下载 txz 也走代理（CA 商店的 proxy.cfg 管不到插件安装）" Type="Path" Display="always" Required="false" Mask="false">/etc</Config>
   <Config Name="工具状态与备份" Target="/config" Default="/mnt/user/appdata/uproxy/state" Mode="rw" Description="配置、sing-box 配置与自动备份（务必放在阵列/缓存上以持久保存）" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/uproxy/state</Config>
-  <Config Name="Docker 套接字" Target="/var/run/docker.sock" Default="/var/run/docker.sock" Mode="rw" Description="用于编排 WARP / sing-box 出口容器、重启 Docker 服务" Type="Device" Display="always" Required="true" Mask="false">/var/run/docker.sock</Config>
+  <Config Name="Docker 套接字" Target="/var/run/docker.sock" Default="/var/run/docker.sock" Mode="rw" Description="仅 Unraid 6.x 重启 dockerd 时需要（让 daemon.json 生效）；sing-box / WARP 已改进程内运行，不再依赖它" Type="Device" Display="always" Required="true" Mask="false">/var/run/docker.sock</Config>
   <Config Name="访问口令" Target="UPX_TOKEN" Default="" Mode="" Description="强烈建议设置：同网段任何人都能改你的 Docker 配置。留空表示不校验" Type="Variable" Display="always" Required="false" Mask="false"></Config>
   <Config Name="宿主机根挂载点" Target="UPX_HOST_ROOT" Default="/host" Mode="" Description="容器内宿主机根目录前缀，一般不用改" Type="Variable" Display="advanced" Required="true" Mask="false">/host</Config>
   <Config Name="时区" Target="TZ" Default="Asia/Shanghai" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">Asia/Shanghai</Config>

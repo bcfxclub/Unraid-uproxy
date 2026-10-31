@@ -1,8 +1,13 @@
 """验证节点测速的两条路径：TCP 握手、以及「经每个节点真实 HTTP 请求」。
 
-没有 Docker 也能跑：HTTP 路径用本地假代理顶替 sing-box —— 每个节点对应一个
-入站端口，假代理在端口上直接回 204 或立刻断连，用来确认
-「状态码判定 / 失败原因 / 结果与节点名的对应关系」都是对的。
+没有 Docker 也能跑：HTTP 路径用本地假代理顶替进程内的 sing-box —— 每个节点对应一个
+本地 mixed 入站端口（127.0.0.1:BASE_PORT+idx），测试里起的假服务器在那个端口上直接
+回 204 或立刻断连，用来确认「状态码判定 / 失败原因 / 结果与节点名的对应关系」都是对的。
+
+重设计后（sing-box 改为进程内运行，不再 docker-in-docker）：
+- HTTP 实测走 ``outlets.temp_run`` / ``stop_temp``（真正的 sing-box 子进程）；本机测
+  试环境用 mock 顶替，避免真的拉起 sing-box。
+- 降级判断来自 ``outlets._sb_ok()``：找不到 sing-box 二进制就降级为 TCP 并在 note 说明。
 
 用法：python tests/nettest_check.py
 """
@@ -88,17 +93,20 @@ def main() -> int:
     print(f"[1] TCP 模式：{len(r['results'])} 条结果，全部不可达 = "
           f"{not any(x['reachable'] for x in r['results'])}")
 
-    # 2. HTTP 模式：用假代理替换 sing-box 容器
+    # 2. HTTP 模式：用本地假服务器顶替进程内的 sing-box。
+    #    每个节点对应一个本地 mixed 入站端口（BASE_PORT + idx），假服务器在那个端口上
+    #    直接回 204（节点 0）或立刻断连（节点 1）。
     ok_srv, dead_srv, base = _bind_pair()
     threading.Thread(target=_serve_ok, args=(ok_srv,), daemon=True).start()
     threading.Thread(target=_serve_dead, args=(dead_srv,), daemon=True).start()
 
-    nettest.TEST_NAME = "127.0.0.1"
     nettest.BASE_PORT = base
-    nettest._docker_ready = lambda: (True, "")
-    nettest._start_container = lambda conf: (True, "")
-    nettest.outlets.ensure_net = lambda: None
-    nettest.host.docker = lambda *a, timeout=60: {"rc": 0, "out": "", "err": ""}
+    # 顶替进程内 sing-box：_sb_ok 报「二进制在」，temp_run 假装已监听，stop_temp 空操作。
+    # 这样 _probe_one 就会真的用 curl 从 127.0.0.1:BASE_PORT+idx 出去访问目标，
+    # 命中我们起的假服务器。
+    nettest.outlets._sb_ok = lambda: (True, "/fake/sing-box")
+    nettest.outlets.temp_run = lambda *a, **k: {"ok": True}
+    nettest.outlets.stop_temp = lambda *a, **k: None
 
     r = nettest.test_nodes(NODES, mode="http", url="http://probe.local/204")
     by = {x["tag"]: x for x in r["results"]}
@@ -113,11 +121,11 @@ def main() -> int:
     print(f"[2] HTTP 模式：可用 {sum(1 for x in r['results'] if x['reachable'])}/{len(r['results'])}"
           f"，失败原因示例：{by['洛杉矶 02'].get('error')}")
 
-    # 3. 降级：Docker 不可用时必须回退 TCP 并说明原因，而不是返回空结果
-    nettest._docker_ready = lambda: (False, "测试用：没有 docker")
+    # 3. 降级：找不到 sing-box 二进制时必须回退 TCP 并在 note 说明，而不是返回空结果
+    nettest.outlets._sb_ok = lambda: (False, "/usr/local/bin/sing-box")
     r = nettest.test_nodes(NODES, mode="http")
-    if r["mode"] != "tcp" or "docker" not in (r.get("note") or ""):
-        fails.append("Docker 不可用时没有降级 + 说明")
+    if r["mode"] != "tcp" or "sing-box" not in (r.get("note") or ""):
+        fails.append("找不到 sing-box 二进制时没有降级 + 说明")
     print(f"[3] 降级：mode={r['mode']}，note={r.get('note')}")
 
     if fails:

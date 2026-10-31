@@ -5,11 +5,20 @@ services:
     container_name: uproxy
     restart: unless-stopped
     ports:
+      # Web 管理界面
       - "8765:8765"
+      # sing-box 代理端点（Unraid 本机 / Outgoing Proxy Manager 指这里）
+      - "7890:7890"
+      # WARP 代理端点
+      - "9091:9091"
     environment:
       UPX_HOST_ROOT: /host
       UPX_STATE_DIR: /config
       TZ: Asia/Shanghai
+    cap_add:
+      - NET_ADMIN          # TUN 透明代理 / WARP 建 wireguard 接口需要
+    devices:
+      - /dev/net/tun:/dev/net/tun
     volumes:
       # 持久化：U 盘配置（开机脚本 go / CA 商店配置）
       - /boot:/host/boot
@@ -19,13 +28,9 @@ services:
       - /usr/local/etc/rc.d:/host/usr/local/etc/rc.d
       # 系统级代理环境变量
       - /etc/profile.d:/host/etc/profile.d
-      # 用于编排 WARP / sing-box 出口容器
+      # 用于 6.x 手动下发：写 /etc/wgetrc 等（OPM 7.0+ 不需要）
+      - /etc:/host/etc
+      # 编排 WARP / sing-box 出口进程（仅 6.x 重启 dockerd 用到，出口本身不再依赖）
       - /var/run/docker.sock:/var/run/docker.sock
       # 本工具自身状态与备份
       - /mnt/user/appdata/uproxy:/config
-    networks:
-      - uproxy-net
-
-networks:
-  uproxy-net:
-    name: uproxy-net

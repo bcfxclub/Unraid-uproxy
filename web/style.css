@@ -1065,3 +1065,14 @@ table.data th { color: var(--muted); font-weight: 400; }
   color: var(--accent); background: var(--accent-soft);
   border: 1px solid rgba(230, 182, 79, .3);
 }
+
+/* 代理端点卡片（OPM 引导） */
+.epcard {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin: 8px 0; padding: 10px 14px;
+  background: var(--accent-soft); border: 1px solid rgba(230, 182, 79, .3);
+  border-radius: 10px;
+}
+.epcard .eptitle { font-weight: 600; color: var(--text); min-width: 150px; }
+.epcard .mono { color: var(--accent); font-size: 14px; }
+.dark .epcard { background: rgba(230, 182, 79, .08); }

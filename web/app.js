@@ -688,6 +688,7 @@ async function warp(action) {
     out.appendChild(el("div", "", d.message || ""));
     if (d.nodocker) out.appendChild(el("div", "hint", "本环境没有 docker 命令行，无法在本地启动容器；规则已保存，部署到 Unraid 后重启出口即可生效。"));
   }
+  renderEndpoints();
   return d;
 }
 $("#btnWarpStart").addEventListener("click", () => safe(() => warp("start"), "启动 WARP"));
@@ -695,6 +696,37 @@ $("#btnWarpStop").addEventListener("click", () => safe(() => warp("stop"), "停�
 $("#btnWarpPrecheck").addEventListener("click", () => safe(() => warp("precheck"), "WARP 预检"));
 $("#btnWarpTest").addEventListener("click", () => safe(() => warp("test"), "验证 WARP"));
 $("#btnWarpStatus").addEventListener("click", () => safe(() => warp("status"), "查询状态"));
+
+/* ---------------- 代理端点（OPM 引导） ---------------- */
+function renderEndpoints() {
+  const box = $("#epList"); if (!box) return;
+  const none = $("#epNone");
+  clear(box);
+  const o = (window.STATE && STATE.config && STATE.config.outlet) || {};
+  const mode = o.mode || "none";
+  const rows = [];
+  if (mode === "singbox") rows.push({ name: "sing-box（订阅节点）", port: o.sb_port || 7890 });
+  if (mode === "warp") rows.push({ name: "WARP（Cloudflare）", port: o.warp_port || 9091 });
+  if (!rows.length) { if (none) none.style.display = ""; return; }
+  if (none) none.style.display = "none";
+  const host = location.hostname || "IP";
+  rows.forEach((r) => {
+    const url = `http://${host}:${r.port}`;
+    const card = el("div", "epcard");
+    card.appendChild(el("div", "eptitle", r.name));
+    card.appendChild(el("div", "mono", url));
+    const btn = el("button", "mini", "复制地址");
+    btn.addEventListener("click", () => {
+      const done = () => toast("已复制：" + url);
+      const fail = () => toast("复制失败，请手动选择复制");
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(done, fail);
+      } else { fail(); }
+    });
+    card.appendChild(btn);
+    box.appendChild(card);
+  });
+}
 
 /* ---------------- 订阅源管理（卡片 + 批量） ---------------- */
 const subSel = new Set();
@@ -2313,6 +2345,7 @@ async function sb(action) {
     out.appendChild(pill(d.ok ? "成功" : "失败", d.ok ? "ok" : "bad"));
   }
   out.appendChild(el("div", "", d.message || d.endpoint || ""));
+  renderEndpoints();
 }
 $("#btnSbStart").addEventListener("click", () => safe(() => sb("start"), "启动 sing-box"));
 $("#btnSbStop").addEventListener("click", () => safe(() => sb("stop"), "停止 sing-box"));
@@ -3662,6 +3695,7 @@ const Dash = (function () {
     last = d || null;
     const nowRunning = !!(last && last.running);
     renderCore();
+    renderEndpoints();
     // 「自动」到底走了哪台：sing-box 的 urltest 自己挑，只有它知道
     const now = (d && d.now) || "";
     const liveChanged = now !== liveNow;

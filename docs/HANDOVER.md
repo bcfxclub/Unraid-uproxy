@@ -96,7 +96,9 @@ docker pull python:3.12-slim    # 验证基础镜像能拉
 
 - ❌ **没在真实 Unraid 上验证过**。`rc.docker` 启动行格式随版本变，这是最大未知
 - ❌ 重启 Docker 走的 `nsenter` 特权容器未实测
-- ❌ WARP / sing-box 容器真启动未实测（开发环境没有 docker）
+- ✅ 出口改为容器内**进程**运行（sing-box 二进制打进镜像，WARP 收编为 wireguard 出站），
+  不再依赖宿主 docker 编排子容器，因此「没有 docker 命令行 → 起不来」的问题已根除。
+  WARP 的 `reserved` 字段按 `client_id` 推导，wireguard 内核模块需在宿主机加载（Unraid 6.10+ 自带）。
 - ❌ CA 商店里的 Docker **图标不显示** —— 那是浏览器直连 GitHub，不经过 Unraid，无解
 - ❌ Cloudflare 共享出口段被 GitHub 限流 —— IP 信誉问题，换什么配置都绕不开
 

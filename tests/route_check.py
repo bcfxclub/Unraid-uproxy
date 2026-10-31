@@ -188,34 +188,41 @@ conf_old = ol._sb_config(live, version=(1, 10))
 ck("1.10 退回旧 DNS 写法", conf_old["dns"]["servers"][0].get("address") == "223.5.5.5")
 
 # --------------------------------------------------------------------------
-print("\n[7] 配置用 docker cp 送进容器（不能 -v 挂容器内路径）")
+print("\n[7] 配置落盘到状态目录（进程内启动用，不再 docker cp）")
+import json as _json  # noqa: E402
 import unittest.mock as mock  # noqa: E402
+from app import host as _host, settings as S  # noqa: E402
 
-calls: list[tuple] = []
-
-
-def fake_docker(*a, timeout=60):
-    calls.append(a)
-    return {"rc": 0, "out": "", "err": ""}
+orig_run = _host.run
 
 
-with mock.patch.object(ol.host, "docker", fake_docker):
-    ol._run_with_conf("t-check", "img", {"x": 1}, ["check", "-c", "/sb-config.json"],
-                      network="none")
-seq = [c[0] for c in calls]
-ck("顺序是 rm → create → cp → start → rm", seq == ["rm", "create", "cp", "start", "rm"], seq)
-ck("没有任何 -v 挂载", not any("-v" in c for c in calls))
-ck("cp 目标是容器内绝对路径",
-   any(c[0] == "cp" and c[2].endswith(":/sb-config.json") for c in calls), calls)
+def fake_run(argv, **kw):
+    # 假装 sing-box check 通过，避免测试机真的要有 sing-box 二进制
+    if len(argv) >= 2 and argv[0].endswith("sing-box") and "check" in argv:
+        return {"rc": 0, "out": "", "err": ""}
+    return orig_run(argv, **kw)
 
-calls.clear()
-with mock.patch.object(ol.host, "docker", fake_docker):
-    ol._run_with_conf("t-run", "img", {"x": 1}, ["-c", "/sb-config.json", "run"],
-                      extra=["--restart", "unless-stopped"], detach=True)
-run_create = [c for c in calls if c[0] == "create"][0]
-ck("常驻容器带 restart 策略并接入 uproxy-net",
-   "--restart" in run_create and "uproxy-net" in run_create, run_create)
-ck("常驻容器用 start（非 -a）启动", any(c[0] == "start" and c[1] != "-a" for c in calls))
+
+with mock.patch.object(ol, "_sb_ok", lambda: (True, "/usr/local/bin/sing-box")), \
+     mock.patch.object(_host, "run", fake_run):
+    chk = ol.sb_check(live)
+ck("sb_check 通过（check.json 已生成）", chk["ok"], chk.get("message"))
+sb_dir = S.STATE_DIR / "singbox"
+ck("check.json 落在状态目录下的 singbox 子目录", (sb_dir / "check.json").exists())
+
+# 真正落盘 config.json 并验证内容与路径
+path = ol._stage_conf(conf, "config.json")
+ck("落盘路径在状态目录的 singbox 下", str(path).startswith(str(sb_dir)), str(path))
+data = _json.loads(path.read_text(encoding="utf-8"))
+ck("落盘内容含 inbounds / outbounds / route",
+   all(k in data for k in ("inbounds", "outbounds", "route")), list(data.keys()))
+ck("Clash API 只在 127.0.0.1:9099（不 publish 到宿主）",
+   "experimental" in data
+   and data["experimental"]["clash_api"]["external_controller"].startswith("127.0.0.1"),
+   data.get("experimental"))
+ck("监听地址是 0.0.0.0（publish 给宿主，供 OPM 用）",
+   any(ib.get("listen") == "0.0.0.0" for ib in data["inbounds"]),
+   [ib.get("listen") for ib in data["inbounds"]])
 
 print()
 if FAIL:
