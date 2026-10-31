@@ -27,10 +27,11 @@ from . import state as st
 from . import stats as stats_mod
 from . import subs
 from . import targets
+from .version import __version__
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
-app = FastAPI(title="uproxy", version="1.0.0")
+app = FastAPI(title="uproxy", version=__version__)
 
 
 @app.on_event("startup")
@@ -153,6 +154,12 @@ def index():
 
 
 app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
+
+
+@app.get("/api/version", include_in_schema=False)
+def api_version():
+    """给前端左下角版本号用，免鉴权（版本号非敏感）。"""
+    return {"version": __version__}
 
 
 # --------------------------------------------------------------------------

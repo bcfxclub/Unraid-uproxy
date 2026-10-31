@@ -55,7 +55,7 @@
     </button>
   </nav>
 
-  <div class="side-foot"><span>uproxy</span><span class="ver">v1.0</span></div>
+  <div class="side-foot"><span>uproxy</span><span class="ver" id="appVer">v1.0.8</span></div>
 </aside>
 
 <!-- ============ 主区 ============ -->
@@ -579,5 +579,14 @@
 
 <div id="toast" class="toast"></div>
 <script src="/static/app.js?v=57"></script>
+<script>
+  /* 左下角版本号：从后端 /api/version 拉真实版本，发版后自动同步，不再写死。 */
+  (function () {
+    var el = document.getElementById("appVer");
+    fetch("/api/version").then(function (r) { return r.json(); }).then(function (d) {
+      if (el && d && d.version) el.textContent = "v" + d.version;
+    }).catch(function () {});
+  })();
+</script>
 </body>
 </html>
