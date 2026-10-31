@@ -58,6 +58,90 @@ UPX_PASSWORD="换成你自己的长随机串" ./install.sh
 
 打开 `http://<Unraid-IP>:8765`，用「用户名 + 密码」登录（默认 `admin` / 你设的密码）。
 
+## 部署详解：手工部署与更新维护
+
+「快速开始」给了三种首次部署方式（一键脚本 / docker compose / 容器模板）。下面补充**手工部署的完整手动步骤**、**后续如何更新**，以及**验证与排错**，方便你在没有脚本或想完全掌控时操作。
+
+### 一、手工部署（完全手动，不依赖 install.sh）
+
+本质就是 `install.sh` 做的事情，拆开手动执行。适合想看清每一步、或在受限环境里分步排错：
+
+```bash
+# 1. 准备目录（BASE 可改，但必须放在阵列/缓存上以持久化）
+BASE=/mnt/user/appdata/uproxy
+SRC=$BASE/src
+STATE=$BASE/state
+mkdir -p "$SRC" "$STATE" /boot/config/plugins/dockerMan/templates-user
+
+# 2. 取得代码：有 git 就 clone，没有就把项目目录 scp/rsync 到 Unraid 后直接用
+git clone https://github.com/bcfxclub/Unraid-uproxy.git "$SRC/repo"
+# 或：把本地项目拷过来（排除 .git）
+#   rsync -avz --exclude='.git' /本地/uproxy/ "$SRC/repo/"
+
+# 3. 把运行所需文件拷进构建目录（先删再拷，保证干净重建）
+rm -rf "$SRC/build" && mkdir -p "$SRC/build"
+cp -r "$SRC/repo/app" "$SRC/repo/web" "$SRC/repo/Dockerfile" "$SRC/repo/requirements.txt" "$SRC/build"/
+
+# 4. 安装 Unraid 容器模板（仅当你要用 WebUI 模板建容器时需要；用下面第 6 步手动 docker run 可跳过）
+cp "$SRC/repo/unraid/my-uproxy.xml" /boot/config/plugins/dockerMan/templates-user/
+
+# 5. 构建镜像（镜像源拉不动见末尾「排错」）
+docker build -t uproxy:latest "$SRC/build"
+
+# 6. 启动容器（等价于 install.sh 的 docker run）
+PW="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 24)"   # 自己设个固定密码更省心
+docker rm -f uproxy >/dev/null 2>&1 || true
+docker run -d --name uproxy --restart unless-stopped \
+  -p 8765:8765 \
+  -e "UPX_HOST_ROOT=/host" -e "UPX_STATE_DIR=/config" -e "TZ=Asia/Shanghai" \
+  -e "UPX_USER=admin" -e "UPX_PASSWORD=$PW" -e "UPX_TOKEN=$PW" \
+  -v /boot:/host/boot \
+  -v /etc/docker:/host/etc/docker \
+  -v /usr/local/etc/rc.d:/host/usr/local/etc/rc.d \
+  -v /etc/profile.d:/host/etc/profile.d \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$STATE:/config" \
+  uproxy:latest
+echo "登录密码：$PW   访问 http://<Unraid-IP>:8765/"
+```
+
+> 关键点：`/config` 必须挂到阵列/缓存（即 `/mnt/user/appdata/uproxy/state`），否则重启后配置与备份全丢。挂载宿主机的四个目录（`/boot`、`/etc/docker`、`rc.d`、`profile.d`）是工具改写代理配置的前提，缺一个功能就会受限。
+
+### 二、更新 / 重部署
+
+代码推到 GitHub 后，Unraid 上拉新代码并重建即可。**更新不等于重新配置**：配置都在 `state`，不在代码里，重部署不会丢配置。
+
+**最简（推荐）：用 update.sh**
+
+```bash
+cd /mnt/user/appdata/uproxy/repo   # 当初 clone 的目录
+./update.sh                        # = git pull --ff-only + install.sh
+```
+
+`update.sh` 内部已包含 `git pull` 与重部署；`install.sh` 会**自动沿用已有密码**（界面改过的 `auth.json`，或首次生成的 `state/.deploy_pw` 备份），不会把登录密码重置成新的。
+
+**没有 git 仓库目录时**（例如之前用纯容器模板部署）：先 clone 一次，再 `./update.sh`：
+
+```bash
+mkdir -p /mnt/user/appdata/uproxy && cd /mnt/user/appdata/uproxy
+git clone https://github.com/bcfxclub/Unraid-uproxy.git repo
+cd repo && ./update.sh
+```
+
+**纯手工更新**：把上面「手工部署」的第 2–6 步再做一遍（`git pull` 代替 clone、复用同一个 `$PW` 密码即可）。
+
+### 三、验证部署成功
+
+- 浏览器开 `http://<Unraid-IP>:8765` 能登录；
+- 「出口」页启动 `sing-box`（或 WARP）后，节点网格里**正在使用的节点会自动标「使用中」**；
+- 异常看日志：`docker logs uproxy`，或 WebUI 的「日志」页。
+
+### 四、排错
+
+- **`docker build` 拉不动基础镜像**（报错 `lookup xxx: no such host`）：daemon.json 里的镜像源域名失效。先 `./fix-mirror.sh` 再重试；都不通就给 dockerd 配 `http_proxy` 走出口。
+- **WebUI 打不开**：确认 Unraid 防火墙/端口映射，`docker ps` 看 uproxy 是否在跑、`8765` 是否映射。
+- **密码不对 / 登不进**：若从没在界面改过密码，重部署后密码以 `install.sh` 打印的为准（已被备份到 `state/.deploy_pw`）；若改过界面密码则永远以 `auth.json` 为准。忘记可删 `state/auth.json` 并重启容器回退到环境变量密码。
+
 ## 界面
 
 仿 v2rayA 的深色侧边栏风格（深底 + 金色 accent），左侧分组导航，右侧卡片式内容。
