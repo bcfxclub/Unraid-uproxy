@@ -52,29 +52,37 @@ def effective_mirrors() -> list[str]:
 def unraid_version() -> str:
     """读 Unraid 系统版本，能读出来就尽量读出来。
 
-    主来源 /etc/unraid-version（含 VERSION="7.0.0"）；兜底读 /etc/os-release
-    （PRETTY_NAME="Unraid 7.0.0" 或 VERSION_ID）。两者都要 /etc 挂进容器，
-    所以模板里 /etc 必须挂载（Required=true）。多路径尝试，任一命中即返回。
+    主来源 /etc/unraid-version：新版（6.11+/7.x）形如 `version="7.3.2"`（小写、
+    带引号），老版形如 `VERSION="7.0.0"`，正则对大小写 / 引号都兼容。
+    兜底 /etc/os-release：只认 PRETTY_NAME="Unraid 7.3.2" 这种带明确 "Unraid"
+    前缀、能抽出 x.y.z 的行。
+
+    注意：刻意不解析 os-release 的 VERSION_ID——通用 Linux 的 VERSION_ID 多为
+    纯数字（如 13/24），拿去当 Unraid 版本号会误识别（曾把 "linux" 里的数字读
+    成 13）。Unraid 的版本只在 unraid-version 或带 "Unraid" 的 PRETTY_NAME 里。
+
+    两个来源都需要宿主 /etc 挂进容器，所以模板里 /etc 已设为 Required=true。
     """
     unraid_files = [S.hpath("etc/unraid-version"), "/etc/unraid-version"]
     osrelease_files = [S.hpath("etc/os-release"), "/etc/os-release"]
-    # 1) 优先 unraid-version：VERSION="7.0.0"
+    # 1) 优先 unraid-version：兼容 VERSION= / version=、加引号 / 不加引号
     for p in unraid_files:
         txt = host.read(p)
-        m = re.search(r'(?im)^\s*VERSION\s*=\s*"?([^"\s#]+)"?', txt)
+        if not txt:
+            continue
+        m = re.search(r'(?im)^\s*VERSION\s*=\s*["\']?([0-9][0-9A-Za-z.\-]*)["\']?', txt)
         if m:
             return m.group(1)
-    # 2) 兜底 os-release：PRETTY_NAME="Unraid 7.0.0" 优先，其次 VERSION_ID
+    # 2) 兜底 os-release：只认 PRETTY_NAME 里明确带 "Unraid" 且含 x.y.z 的
     for p in osrelease_files:
         txt = host.read(p)
-        m = re.search(r'(?im)^\s*PRETTY_NAME\s*=\s*"?(Unraid[^\"#]*)"?', txt)
+        if not txt:
+            continue
+        m = re.search(r'(?im)^\s*PRETTY_NAME\s*=\s*["\']?([^"\']*\bUnraid\b[^"\']*)["\']?', txt)
         if m:
             mm = re.search(r"(\d+\.\d+(?:\.\d+)?)", m.group(1))
             if mm:
                 return mm.group(1)
-        m = re.search(r'(?im)^\s*VERSION_ID\s*=\s*"?([^"\s#]+)"?', txt)
-        if m:
-            return m.group(1)
     return ""
 
 
