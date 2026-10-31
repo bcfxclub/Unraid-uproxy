@@ -333,7 +333,7 @@ def sb_start(cfg: st.AppCfg) -> dict:
     ok, binp = _sb_ok()
     if not ok:
         return {"ok": False, "message": f"未找到 sing-box 二进制（{binp}）。请重新拉取最新镜像："
-                                         f"docker pull ghcr.io/bcfxclub/uproxy:latest"}
+                                         f"docker pull bcfx/uproxy:latest"}
     # 先停掉可能存在的旧实例，避免端口冲突
     _kill(_pid_path("sb"))
     try:
@@ -554,7 +554,7 @@ def warp_start(cfg: st.AppCfg) -> dict:
     ok, binp = _sb_ok()
     if not ok:
         return {"ok": False, "message": f"未找到 sing-box 二进制（{binp}）。请重新拉取最新镜像："
-                                         f"docker pull ghcr.io/bcfxclub/uproxy:latest"}
+                                         f"docker pull bcfx/uproxy:latest"}
     reg = _warp_register()
     if not reg.get("ok"):
         return {"ok": False, "message": "WARP 注册失败：" + (reg.get("detail") or "未知原因")}

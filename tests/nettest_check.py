@@ -128,6 +128,25 @@ def main() -> int:
         fails.append("找不到 sing-box 二进制时没有降级 + 说明")
     print(f"[3] 降级：mode={r['mode']}，note={r.get('note')}")
 
+    # 4. 临时测速配置必须跟主配置同一套 1.12 版本自适应，否则 1.12+ 上
+    #    临时 sing-box 启动 FATAL，所有节点都测不出延迟（v1.0.5 后还存在的坑）。
+    c12 = nettest._conf(
+        [{"type": "vmess", "tag": "n1"}],
+        [{"type": "mixed", "tag": "p", "listen": "127.0.0.1", "listen_port": 20000}],
+        [{"inbound": ["p"], "outbound": "n1"}], version=(1, 12))
+    if c12["route"].get("default_domain_resolver") != "ali":
+        fails.append("1.12 临时测速配置缺 route.default_domain_resolver（会 FATAL）")
+    if not any(s.get("tag") == "ali" for s in c12["dns"]["servers"]):
+        fails.append("1.12 临时测速配置缺 ali DNS 服务器")
+    c10 = nettest._conf(
+        [{"type": "vmess", "tag": "n1"}],
+        [{"type": "mixed", "tag": "p", "listen": "127.0.0.1", "listen_port": 20000}],
+        [{"inbound": ["p"], "outbound": "n1"}], version=(1, 10))
+    if "default_domain_resolver" in c10["route"]:
+        fails.append("1.10 临时测速配置多带了 default_domain_resolver（会被旧版拒）")
+    print(f"[4] 临时测速配置版本自适应：1.12 ddr={c12['route'].get('default_domain_resolver')}，"
+          f"1.10 无 ddr={'default_domain_resolver' not in c10['route']}")
+
     if fails:
         print("\n失败：")
         for f in fails:

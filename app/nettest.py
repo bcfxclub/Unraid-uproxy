@@ -77,12 +77,36 @@ def _sort(res: list[dict]) -> list[dict]:
 # --------------------------------------------------------------------------
 # 一次性 sing-box 进程
 # --------------------------------------------------------------------------
-def _conf(outs: list[dict], inbounds: list[dict], rules: list[dict]) -> dict:
+def _conf(outs: list[dict], inbounds: list[dict], rules: list[dict],
+          version: "tuple[int, int] | None" = None) -> dict:
+    """生成一次性测速用的 sing-box 配置。
+
+    必须跟主配置（outlets._sb_config）保持同一套版本自适应：sing-box 1.12+ 强制
+    要求显式 ``route.default_domain_resolver``，否则启动直接 FATAL，测速就会整体
+    失败——表现为「所有节点都测不出延迟 / 显示 HTTP 超时」。这里漏掉这点就是
+    v1.0.5 之后还测不出延迟的原因。
+    """
+    ver = version or outlets.sb_version()
+    new_dns = ver >= (1, 12)
+    if new_dns:
+        # 1.12 起 DNS 服务器用 type+server 写法；default_domain_resolver 指向 ali。
+        dns_block = {"servers": [
+            {"type": "udp", "tag": "ali", "server": "223.5.5.5"},
+            {"type": "udp", "tag": "dnspod", "server": "119.29.11.11"},
+        ], "final": "ali"}
+    else:
+        dns_block = {"servers": [{"address": "223.5.5.5"},
+                                 {"address": "119.29.11.11"}],
+                     "final": "223.5.5.5"}
+    route_block: dict = {"rules": rules, "final": "direct"}
+    if new_dns:
+        route_block["default_domain_resolver"] = "ali"
     return {
         "log": {"level": "error"},
+        "dns": dns_block,
         "inbounds": inbounds,
         "outbounds": outs + [{"type": "direct", "tag": "direct"}],
-        "route": {"rules": rules, "final": "direct"},
+        "route": route_block,
     }
 
 
