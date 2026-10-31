@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>uproxy · Unraid 出网加速</title>
-<link rel="stylesheet" href="/static/style.css?v=30">
+<link rel="stylesheet" href="/static/style.css?v=32">
 </head>
 <body>
 
@@ -204,8 +204,8 @@
         <button id="btnNodeDisableSel" class="mini" disabled>停用</button>
         <button id="btnNodeRestore" class="mini" hidden>恢复已删除</button>
         <span class="grow"></span>
-        <button id="btnTestTarget" title="选择测速对象：选好后再点右边「测速」">目标：Google &#9662;</button>
-        <button id="btnNodeTest" class="primary" title="按当前目标实测全部节点">测速</button>
+        <button id="btnTestTarget" title="选择测速对象：选好后再点右边「测速」· 默认 TCP 握手">目标：TCP 握手 &#9662;</button>
+        <button id="btnNodeTest" class="primary" title="按当前目标实测全部节点，测完按延迟重排顺序">测速</button>
         <button id="btnNodeGrid" class="on" title="网格视图">▦</button>
         <button id="btnNodeList" title="列表视图">☰</button>
       </div>
@@ -428,6 +428,6 @@
 </div>
 
 <div id="toast" class="toast"></div>
-<script src="/static/app.js?v=30"></script>
+<script src="/static/app.js?v=32"></script>
 </body>
 </html>

@@ -813,9 +813,12 @@ function shortUrl(u) { return (u || "").replace(/^https?:\/\//, "").replace(/\/$
 function testTarget() {
   let t = null;
   try { t = JSON.parse(localStorage.getItem(TEST_TARGET_KEY) || "null"); } catch (e) { t = null; }
-  if (!t || typeof t !== "object") return Object.assign({}, TEST_TARGETS[0]);
+  // 默认目标是 TCP 握手：进页面就能看到每个节点的端口延迟，不必等一次 HTTP 实测。
+  // 用户显式挑了 Google/GitHub/自定义地址才按那个来（存在 localStorage 里）。
+  const fallback = () => Object.assign({}, TEST_TARGETS[3]);
+  if (!t || typeof t !== "object") return fallback();
   if (t.tcp) return { label: t.label || TEST_TARGETS[3].label, url: "", tcp: true };
-  return t.url ? { label: t.label || shortUrl(t.url), url: t.url } : Object.assign({}, TEST_TARGETS[0]);
+  return t.url ? { label: t.label || shortUrl(t.url), url: t.url } : fallback();
 }
 
 function setTestTarget(t) {
@@ -833,7 +836,10 @@ function syncTestButtons() {
       : `当前目标 ${t.url} · 点这里换`;
   }
   const run = $("#btnNodeTest");
-  if (run) run.title = t.tcp ? "对全部节点做 TCP 握手测速" : `经每个节点真实访问 ${t.url}`;
+  if (run) {
+    run.title = (t.tcp ? "对全部节点做 TCP 握手测速" : `经每个节点真实访问 ${t.url}`)
+      + (testSortOn() ? "，测完按延迟重排并保存顺序" : "");
+  }
 }
 
 /* 延迟结果的展示口径：HTTP 实测和 TCP 握手不能混为一谈 */
@@ -860,7 +866,58 @@ function delayTitle(r) {
   return r.error ? `${head}\n失败原因：${r.error}` : head;
 }
 
-async function runNodeTest(names, mode, url) {
+/* 测速排序：延迟低的在前，超时/失败/没测过的垫底。
+   排序结果会存到后端（outlet.sb_order），重启、重新同步订阅后顺序不变。 */
+const TEST_SORT_KEY = "upx_test_sort";
+
+function testSortOn() {
+  try { return localStorage.getItem(TEST_SORT_KEY) !== "0"; } catch (e) { return true; }
+}
+
+function setTestSort(on) {
+  try { localStorage.setItem(TEST_SORT_KEY, on ? "1" : "0"); } catch (e) { /* 隐私模式忽略 */ }
+}
+
+// 名次：0=有耗时 1=通但没耗时 2=超时/失败 3=没有结果
+function delayRank(r) {
+  if (!r) return 3;
+  if (!r.reachable) return 2;
+  return (r.ms === null || r.ms === undefined) ? 1 : 0;
+}
+
+function sortNodesByDelay() {
+  const before = nodeCache.map((n) => n.name);
+  if (!before.length) return false;
+  const idx = new Map(before.map((n, i) => [n, i]));
+  nodeCache = nodeCache.slice().sort((a, b) => {
+    const ra = delayMap[a.name] || null;
+    const rb = delayMap[b.name] || null;
+    const ka = delayRank(ra), kb = delayRank(rb);
+    if (ka !== kb) return ka - kb;              // 有耗时的整体排在失败前面
+    if (ka === 0 && ra.ms !== rb.ms) return ra.ms - rb.ms;  // 同组内按延迟升序
+    return idx.get(a.name) - idx.get(b.name);   // 其余保持原有相对顺序
+  });
+  const after = nodeCache.map((n) => n.name);
+  if (after.join("\u0000") === before.join("\u0000")) return false;
+  // 同步进 STATE，renderNodes 会从 STATE 重建 nodeCache
+  if (STATE?.config?.outlet) STATE.config.outlet.sb_nodes = nodeCache.slice();
+  return true;
+}
+
+async function saveNodeOrder() {
+  const order = nodeCache.map((n) => n.name);
+  if (!order.length) return false;
+  try {
+    await api("/api/nodes", "POST", { order: order });
+    return true;
+  } catch (e) {
+    toast(`排序结果保存失败：${e.message}`);
+    return false;
+  }
+}
+
+async function runNodeTest(names, mode, url, opts) {
+  const opt = opts || {};
   const one = names && names.length === 1;
   const t = testTarget();
   if (!mode) mode = t.tcp ? "tcp" : "http";
@@ -875,7 +932,7 @@ async function runNodeTest(names, mode, url) {
   const btn = $("#btnNodeTest");
   const label = btn ? btn.textContent : "";
   if (btn && !names) { btn.disabled = true; btn.textContent = "测速中…"; }
-  toast(mode === "tcp"
+  if (!opt.silent) toast(mode === "tcp"
     ? `正在握手：${one ? names[0] : "全部节点"}…`
     : `正在经节点访问 ${tgt.label}：${one ? names[0] : "全部节点"}…`);
 
@@ -889,7 +946,13 @@ async function runNodeTest(names, mode, url) {
   const res = d.results || [];
   if (!names) delayMap = {};
   res.forEach((r) => { delayMap[r.tag] = r; });
+
+  // 全部测速完成 → 按延迟重排并落盘；单节点测速不动顺序，免得卡片乱跳
+  let sorted = false, saved = false;
+  if (!names && res.length && testSortOn()) sorted = sortNodesByDelay();
   renderNodes();
+  if (sorted) saved = await saveNodeOrder();
+  if (opt.silent) return;
 
   const up = res.filter((r) => r.reachable);
   if (one) {
@@ -903,7 +966,17 @@ async function runNodeTest(names, mode, url) {
   const head = d.mode === "http"
     ? `实测 ${shortUrl(d.url || (tgt && tgt.url))}`
     : (mode === "tcp" ? "TCP 握手" : "本机无 Docker，已降级为 TCP 握手");
-  toast(`${head}：可用 ${up.length}/${res.length}` + (best !== null ? `，最快 ${best}ms` : ""));
+  toast(`${head}：可用 ${up.length}/${res.length}` + (best !== null ? `，最快 ${best}ms` : "")
+    + (sorted ? (saved ? "，已按延迟重排" : "，排序未保存") : ""));
+}
+
+/* 进页面自动刷一轮 TCP 握手延迟：标签上立刻有数字，不必先点测速。
+   不管保存的测速目标是哪个，进来先用 TCP 探一遍（快、不起容器）；
+   和手动测速一样按延迟重排并保存 —— 顺序永远反映最近一次测速结果。 */
+function autoTcpProbe() {
+  const nodes = STATE?.config?.outlet?.sb_nodes || [];
+  if (!nodes.length) return;
+  runNodeTest(null, "tcp", null, { silent: true }).catch(() => {});
 }
 
 async function editCustomTarget() {
@@ -936,6 +1009,16 @@ function testMenuItems() {
   items.push({
     label: custom ? `✓ 自定义：${shortUrl(cur.url)}` : "自定义地址…",
     onClick: () => safe(editCustomTarget, "测速目标"),
+  });
+  items.push({ sep: true });
+  items.push({
+    label: `${testSortOn() ? "✓ " : "　"}测速后按延迟排序`,
+    onClick: () => {
+      const on = !testSortOn();
+      setTestSort(on);
+      syncTestButtons();
+      toast(on ? "已开启排序：延迟低的排前面，超时的垫底" : "已关闭排序：测速只更新延迟，不改顺序");
+    },
   });
   return items;
 }
@@ -1801,6 +1884,7 @@ async function boot() {
     $("#who").textContent = info.user || "";
   }
   await loadState().catch((e) => toast(`初始化失败：${e.message}`));
+  autoTcpProbe();
   loadBackups().catch(() => {});
   Traffic.start();
   if (typeof LogPage !== "undefined") LogPage.boot();

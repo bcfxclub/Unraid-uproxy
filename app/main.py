@@ -118,11 +118,13 @@ class SubDelReq(BaseModel):
 
 
 class NodeReq(BaseModel):
-    disabled: list[str] = Field(default_factory=list)
+    # None = 本次请求没打算改停用表（避免只传 delete / order 时把停用状态清空）
+    disabled: list[str] | None = None
     node: str = ""
     rename: dict = Field(default_factory=dict)   # {from: old_name, to: new_name}
     delete: list[str] = Field(default_factory=list)    # 批量删除节点（进黑名单）
     restore: list[str] = Field(default_factory=list)   # 从黑名单恢复
+    order: list[str] | None = None                     # 节点显示顺序（测速排序结果）
 
 
 class NodeTestReq(BaseModel):
@@ -502,6 +504,7 @@ def api_subs_fetch(req: SubReq):
 
     cfg = st.load()
     cfg.outlet.sb_nodes = parsed["nodes"]
+    _apply_order(cfg)
     if req.url.strip():
         cfg.outlet.sub_url = req.url.strip()
     st.save(cfg)
@@ -544,6 +547,23 @@ def api_subs_test(req: NodeTestReq):
 # --------------------------------------------------------------------------
 # 订阅管理（多订阅源）
 # --------------------------------------------------------------------------
+def _apply_order(cfg: st.AppCfg) -> None:
+    """按已保存的顺序（``sb_order``）重排 ``sb_nodes``。
+
+    顺序是「测速后按延迟自动排序」的产物：延迟低的在前，超时/失败垫底。
+    订阅重新同步会按来源重排节点，所以这里在每次同步后把顺序还原，
+    同时顺手清掉已删除节点的名字；``order`` 里没有的新节点保持原有相对
+    顺序排在末尾（稳定排序）。
+    """
+    order = [x for x in (cfg.outlet.sb_order or []) if x]
+    if not order:
+        return
+    rank = {name: i for i, name in enumerate(order)}
+    tail = len(order)
+    cfg.outlet.sb_nodes.sort(key=lambda n: rank.get(n.get("name", ""), tail))
+    cfg.outlet.sb_order = [n.get("name", "") for n in cfg.outlet.sb_nodes]
+
+
 def _node_view(n: dict) -> dict:
     """统一的节点对外字段（含 source，供前端按订阅分组/过滤）。"""
     return {"name": n["name"], "type": n["type"], "server": n["server"], "port": n["port"],
@@ -560,6 +580,7 @@ def _resync(cfg: st.AppCfg) -> dict:
         res = {**res, "nodes": nodes,
                "message": f"{res['message']}（已排除 {len(res['nodes']) - len(nodes)} 个手动删除的节点）"}
     cfg.outlet.sb_nodes = nodes
+    _apply_order(cfg)
     # 回填每个源的 count / updated_at / 最近结果
     by_url = {s.get("url"): s for s in cfg.outlet.subscriptions}
     now = _t.strftime("%Y-%m-%d %H:%M", _t.localtime())
@@ -745,6 +766,7 @@ def api_nodes(req: NodeReq):
                 cfg.outlet.sb_node = to
             cfg.outlet.sb_disabled = [to if d == frm else d for d in cfg.outlet.sb_disabled]
             cfg.outlet.sb_removed = [to if d == frm else d for d in cfg.outlet.sb_removed]
+            cfg.outlet.sb_order = [to if d == frm else d for d in cfg.outlet.sb_order]
     if req.delete:
         drop = {d for d in req.delete if d}
         cfg.outlet.sb_nodes = [n for n in cfg.outlet.sb_nodes if n["name"] not in drop]
@@ -766,10 +788,14 @@ def api_nodes(req: NodeReq):
             for n in cfg.outlet.sb_nodes
         ], "sb_node": cfg.outlet.sb_node, "sb_disabled": cfg.outlet.sb_disabled,
             "sb_removed": cfg.outlet.sb_removed}
+    if req.order is not None:
+        # 测速排序结果：只改显示顺序，不动节点本身
+        cfg.outlet.sb_order = [x for x in req.order if x]
     if req.disabled is not None:
         cfg.outlet.sb_disabled = [d for d in req.disabled if d]
     if req.node:
         cfg.outlet.sb_node = req.node
+    _apply_order(cfg)
     st.save(cfg)
     return {"ok": True, "nodes": [
         {**_node_view(n), "disabled": n["name"] in cfg.outlet.sb_disabled}

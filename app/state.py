@@ -40,6 +40,9 @@ class OutletCfg(BaseModel):
     sb_port: int = 7890
     sb_node: str = ""
     sb_nodes: list[dict[str, Any]] = Field(default_factory=list)
+    # 节点显示顺序（测速后按延迟自动排序的结果，低延迟在前、超时垫底）。
+    # 订阅重新同步会按来源重排 sb_nodes，所以顺序单独存一份，同步后据此还原。
+    sb_order: list[str] = Field(default_factory=list)
     # 被用户停用的节点 name 列表（仍在订阅里，但不进 selector / 不分流）
     sb_disabled: list[str] = Field(default_factory=list)
     # 被用户删除的节点 name 黑名单（订阅里还有，但不再出现在列表/配置里）
