@@ -190,9 +190,10 @@ _VER_CACHE: dict[str, tuple[int, int]] = {}
 def sb_version(image: str = "") -> tuple[int, int]:
     """探测 sing-box 大版本（本机二进制）。
 
-    为什么要探：`action: reject` 是 1.11 才有的，而旧的 block 出站 1.13 又被删了。
+    为什么要探：`action: reject` 是 1.11 才有的，而旧的 block 出站 1.13 又被删了；
+    1.12.0 起又强制要求显式 `route.default_domain_resolver`，缺了直接 FATAL。
     写死任何一种，碰到另一侧版本就是「配置被拒、整个代理起不来」。
-    探测失败时按新版处理（当前镜像基本都是新的）。
+    探测失败时按 1.12 处理（当前镜像基本都是 1.12+，且显式字段在 1.11 也没副作用风险更低）。
     """
     ok, binp = _sb_ok()
     if not ok:
@@ -203,7 +204,7 @@ def sb_version(image: str = "") -> tuple[int, int]:
     m = re.search(r"version\s+(\d+)\.(\d+)", txt, re.I) or re.search(r"(\d+)\.(\d+)\.\d+", txt)
     if r.get("rc") == 0 and m:
         return (int(m.group(1)), int(m.group(2)))
-    return (1, 11)
+    return (1, 12)
 
 
 def _sb_config(cfg: st.AppCfg, version: tuple[int, int] | None = None,
@@ -282,6 +283,12 @@ def _sb_config(cfg: st.AppCfg, version: tuple[int, int] | None = None,
         # 只有 ≤1.10 的老镜像才会走到这里（1.13 起 block 出站已被移除）
         outbounds.append({"type": "block", "tag": "block"})
 
+    route_block = built["route"]
+    if new_dns:
+        # sing-box 1.12.0 起强制要求显式声明默认域名解析器，否则配置被拒（FATAL）。
+        # 指向 dns 块里名为 ali 的服务器（见 dns_block 的 final）。
+        route_block = dict(route_block, default_domain_resolver="ali")
+
     conf: dict = {
         "log": {"level": "warn"},
         # Clash API：WebUI 用它拉实时连接数（统计面板的 /connections）。
@@ -293,7 +300,7 @@ def _sb_config(cfg: st.AppCfg, version: tuple[int, int] | None = None,
         "dns": dns_block,
         "inbounds": inbounds,
         "outbounds": outbounds,
-        "route": built["route"],
+        "route": route_block,
     }
     return conf
 
@@ -498,6 +505,8 @@ def _warp_register(timeout: int = 20) -> dict:
 
 
 def _warp_conf(cfg: st.AppCfg, reg: dict) -> dict:
+    ver = sb_version()
+    new_dns = ver >= (1, 12)
     local = [a for a in (reg.get("address_v4"), reg.get("address_v6")) if a]
     wg: dict = {
         "type": "wireguard",
@@ -509,22 +518,36 @@ def _warp_conf(cfg: st.AppCfg, reg: dict) -> dict:
     }
     if reg.get("reserved"):
         wg["reserved"] = reg["reserved"]
-    return {
+    route_block = {
+        "rules": [
+            {"protocol": "dns", "outbound": "direct"},
+            {"ip_is_private": True, "outbound": "direct"},
+        ],
+        "final": "warp",
+        "auto_detect_interface": True,
+    }
+    if new_dns:
+        # 1.12.0+ 同样要求显式默认域名解析器；DNS 服务器走 direct 出口，
+        # 避免「解析 WARP 对端域名 → 又经 warp 出口」这种自环。
+        route_block["default_domain_resolver"] = "ali"
+        dns_block = {"servers": [
+            {"type": "udp", "tag": "ali", "server": "223.5.5.5", "detour": "direct"},
+            {"type": "udp", "tag": "dnspod", "server": "119.29.11.11", "detour": "direct"},
+        ], "final": "ali"}
+    else:
+        dns_block = None
+    conf: dict = {
         "log": {"level": "warn"},
         "inbounds": [{
             "type": "mixed", "tag": "mixed-in",
             "listen": "0.0.0.0", "listen_port": cfg.outlet.warp_port,
         }],
         "outbounds": [wg, {"type": "direct", "tag": "direct"}],
-        "route": {
-            "rules": [
-                {"protocol": "dns", "outbound": "direct"},
-                {"ip_is_private": True, "outbound": "direct"},
-            ],
-            "final": "warp",
-            "auto_detect_interface": True,
-        },
+        "route": route_block,
     }
+    if dns_block:
+        conf["dns"] = dns_block
+    return conf
 
 
 def warp_start(cfg: st.AppCfg) -> dict:

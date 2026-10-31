@@ -34,8 +34,10 @@ RUN set -eux; \
     docker --version
 
 # sing-box 二进制：uproxy 用它在本容器内**直接作为进程**跑出口（不再 docker-in-docker）。
-# 选 1.11.x：支持 action:reject（分流规则）、wireguard outbound（WARP）、mixed 入站（HTTP+SOCKS）。
-ARG SING_BOX_VERSION=1.11.8
+# 锁 1.12.x：1.12.0 起配置必须显式声明 route.default_domain_resolver，否则启动 FATAL；
+# 代码已按版本自适应生成（1.12+ 用新 DNS 写法 + default_domain_resolver，旧版回退）。
+# 1.12.x 同时具备 action:reject（分流规则）、wireguard outbound（WARP）、mixed 入站（HTTP+SOCKS）。
+ARG SING_BOX_VERSION=1.12.7
 RUN set -eux; \
     arch=$(uname -m); \
     case "$arch" in \

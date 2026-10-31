@@ -186,6 +186,10 @@ ck("route 里有我们的规则",
    any(r.get("domain_suffix") == ["netflix.com"] for r in conf["route"]["rules"]))
 conf_old = ol._sb_config(live, version=(1, 10))
 ck("1.10 退回旧 DNS 写法", conf_old["dns"]["servers"][0].get("address") == "223.5.5.5")
+ck("1.12 必须带 route.default_domain_resolver（否则启动直接 FATAL）",
+   conf["route"].get("default_domain_resolver") == "ali", conf["route"].get("default_domain_resolver"))
+ck("1.10 不应带 default_domain_resolver（旧版字段不存在会被拒）",
+   "default_domain_resolver" not in conf_old["route"])
 
 # --------------------------------------------------------------------------
 print("\n[7] 配置落盘到状态目录（进程内启动用，不再 docker cp）")
@@ -223,6 +227,21 @@ ck("Clash API 只在 127.0.0.1:9099（不 publish 到宿主）",
 ck("监听地址是 0.0.0.0（publish 给宿主，供 OPM 用）",
    any(ib.get("listen") == "0.0.0.0" for ib in data["inbounds"]),
    [ib.get("listen") for ib in data["inbounds"]])
+
+# --------------------------------------------------------------------------
+print("\n[8] WARP 配置（wireguard outbound）在 1.12+ 也要补 default_domain_resolver")
+_wreg = {"ok": True, "private_key": "x", "address_v4": "172.16.0.2/32",
+         "peer_public_key": "y", "server": "162.159.193.1:51820", "reserved": "AAAA"}
+with mock.patch.object(ol, "sb_version", lambda *a, **k: (1, 12)):
+    w12 = ol._warp_conf(live, _wreg)
+ck("1.12 带 dns 块与 default_domain_resolver",
+   w12.get("dns") and w12["route"].get("default_domain_resolver") == "ali", w12.get("route"))
+ck("WARP 的 DNS 服务器走 direct 出口（避免经 warp 自身解析成环）",
+   w12["dns"]["servers"][0].get("detour") == "direct", w12["dns"]["servers"][0])
+with mock.patch.object(ol, "sb_version", lambda *a, **k: (1, 10)):
+    w10 = ol._warp_conf(live, _wreg)
+ck("1.10 不带 dns 块与 default_domain_resolver（保持旧版兼容）",
+   "dns" not in w10 and "default_domain_resolver" not in w10["route"], w10.get("route"))
 
 print()
 if FAIL:
