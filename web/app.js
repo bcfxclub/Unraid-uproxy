@@ -93,27 +93,35 @@ function pill(text, kind) {
 
 function clear(node) { node.textContent = ""; }
 
-/* ---------------- tabs ---------------- */
+/* ---------------- tabs（侧边栏） ---------------- */
+const TITLES = { overview: "概览", outlet: "出口", subs: "订阅", push: "下发", backup: "备份与还原", docs: "文档" };
 function switchTab(name) {
-  const btn = $$(".tab").find((x) => x.dataset.tab === name);
+  const btn = $$(".nav button").find((x) => x.dataset.tab === name);
   if (!btn) return;
-  $$(".tab").forEach((x) => x.classList.remove("on"));
+  $$(".nav button").forEach((x) => x.classList.remove("on"));
   $$("section").forEach((x) => x.classList.remove("on"));
   btn.classList.add("on");
-  $(`#tab-${btn.dataset.tab}`).classList.add("on");
+  $(`#tab-${name}`).classList.add("on");
+  $("#pageTitle").textContent = TITLES[name] || name;
+  history.replaceState(null, "", `?${new URLSearchParams({ tab: name, token: TOKEN }).toString()}`);
 }
 
-$$(".tab").forEach((b) => b.addEventListener("click", () => switchTab(b.dataset.tab)));
+$$(".nav button").forEach((b) => b.addEventListener("click", () => switchTab(b.dataset.tab)));
 
-// 深链：?tab=push 或 #push 直达指定页签
+// 深链：?tab=push 直达指定页签
 (function restoreTab() {
   const q = new URLSearchParams(location.search).get("tab");
-  const h = decodeURIComponent(location.hash.replace(/^#/, ""));
-  if (q) switchTab(q);
-  else if (h) switchTab(h);
+  if (q && TITLES[q]) switchTab(q);
 })();
 
 /* ---------------- 渲染 ---------------- */
+function setRunBadge(running, text) {
+  const b = $("#runBadge");
+  if (!b) return;
+  b.classList.toggle("ok", !!running);
+  $("#runText").textContent = text || (running ? "正在运行" : "未运行");
+}
+
 function renderProbe(p) {
   const t = $("#probeTable");
   clear(t);
@@ -140,9 +148,12 @@ function renderProbe(p) {
     td.appendChild(pill(`${k}: ${v.exists ? "找到" : "缺失"}`, v.exists ? "ok" : "bad"));
     td.appendChild(document.createTextNode(" "));
   });
+  head.appendChild(td);
   t.appendChild(head);
-  t.appendChild(el("tr")).appendChild(td);
-  $("#env").textContent = `HOST_ROOT=${p.host_root}`;
+  $("#env").textContent = p.host_root ? `HOST_ROOT=${p.host_root}` : "";
+  $("#probeHint").textContent = p.unraid ? `Unraid ${p.unraid}` : "";
+  const anyPath = Object.values(p.paths || {}).some((x) => x.exists);
+  setRunBadge(anyPath || p.docker_version, anyPath ? "已接入宿主机" : "未识别宿主机");
 }
 
 function renderConfig(c) {
@@ -175,6 +186,7 @@ function renderConfig(c) {
     sel.appendChild(o);
   });
   if (c.outlet.sb_node) sel.value = c.outlet.sb_node;
+  renderNodeList(c.outlet.sb_nodes || []);
 }
 
 async function loadState() {
@@ -303,6 +315,25 @@ $("#btnWarpTest").addEventListener("click", () => safe(() => warp("test"), "验�
 $("#btnWarpStatus").addEventListener("click", () => safe(() => warp("status"), "查询状态"));
 
 /* ---------------- 订阅 ---------------- */
+function renderNodeList(nodes) {
+  const box = $("#nodeList");
+  clear(box);
+  if (!(nodes || []).length) { box.appendChild(el("div", "hint", "暂无节点。拉取订阅后这里会列出可选出口。")); return; }
+  const table = el("table", "data");
+  const tr = el("tr");
+  ["节点", "协议", "地址"].forEach((h) => tr.appendChild(el("th", "", h)));
+  table.appendChild(tr);
+  nodes.forEach((n) => {
+    const row = el("tr");
+    row.appendChild(el("td", "", n.name));
+    row.appendChild(el("td")).appendChild(pill(n.type, "mute"));
+    row.appendChild(el("td", "mono", `${n.server}:${n.port}`));
+    table.appendChild(row);
+  });
+  box.appendChild(table);
+  box.appendChild(el("div", "hint", "选好节点后到「出口」页选它并启动 sing-box。"));
+}
+
 $("#btnSubFetch").addEventListener("click", () => safe(async () => {
   const out = $("#subOut");
   clear(out);
@@ -320,11 +351,13 @@ $("#btnSubFetch").addEventListener("click", () => safe(async () => {
   }
   const sel = $("#selNode");
   clear(sel);
+  sel.appendChild(el("option", "", "（未选择节点）"));
   (d.nodes || []).forEach((n) => {
     const o = el("option", "", `${n.name} · ${n.type}`);
     o.value = n.name;
     sel.appendChild(o);
   });
+  renderNodeList(d.nodes || []);
 }, "拉取订阅"));
 
 $("#btnSubTest").addEventListener("click", () => safe(async () => {
