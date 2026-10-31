@@ -895,12 +895,17 @@ table.data th { color: var(--muted); font-weight: 400; }
   padding-right: 28px;
 }
 
-/* 编辑弹窗里每行的延迟（两种并排，窄了自动省略） */
-.ged-lat {
-  flex: 0 1 auto; min-width: 0; max-width: 150px;
+/* 编辑弹窗里每行的延迟：TCP / URL 各占一列（不再挤成一串） */
+.ged-ms {
   font-size: 10.5px; color: var(--muted); font-family: var(--mono);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  text-align: right; white-space: nowrap; overflow: hidden;
+  cursor: pointer; opacity: .95;
 }
+.ged-ms.none { opacity: .5; }
+.ged-ms.ok { color: var(--ok); }
+.ged-ms.warn { color: var(--warn); }
+.ged-ms.bad { color: var(--bad); }
+.ged-ms:hover { text-decoration: underline dotted; }
 
 /* 节点延迟卡片：名称 | 条形 | TCP | HTTP 四列 */
 .dash-card .dlrow { grid-template-columns: minmax(0, 1.45fr) minmax(0, .9fr) 44px 46px; }
@@ -931,24 +936,45 @@ table.data th { color: var(--muted); font-weight: 400; }
   background: transparent;
 }
 
-/* 编辑弹窗右侧：延迟与协议之间加一道分隔，别糊在一起 */
-.ged-lat { text-align: right; }
+/* 编辑弹窗右侧：协议列前面加一道分隔，延迟列与协议不糊在一起 */
 .ged-type { padding-left: 8px; border-left: 1px solid var(--line); }
 
-/* 编辑弹窗每行改成网格：勾选 | 名称 | 两种延迟 | 协议，
+/* 编辑弹窗每行改成网格：勾选 | 名称 | TCP | URL | 协议，
    名称自己省略、右侧固定宽，65 个节点也不会把协议挤出弹窗 */
 .ged-item {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto 58px;
+  grid-template-columns: auto minmax(0, 1fr) 56px 56px 52px;
   align-items: center;
   gap: 8px;
 }
-.ged-lat { max-width: none; }
 .ged-type {
   padding-left: 8px; text-align: right;
   border-left: 1px solid var(--line);
 }
 .modal.geditor { max-width: 500px; }
+
+/* TCP / URL 测速胶囊：点一下就地测这批节点，选中的那个高亮 */
+.ged-mode {
+  padding: 3px 9px; border-radius: 7px; cursor: pointer;
+  font: inherit; font-size: 11px; font-family: var(--mono);
+  letter-spacing: .4px; line-height: 1.4;
+  color: var(--muted); background: transparent; border: 1px solid var(--line);
+  transition: color .12s, border-color .12s, background .12s;
+}
+.ged-mode:hover:not(:disabled) { color: var(--text); border-color: var(--muted); }
+.ged-mode.on {
+  color: var(--accent); border-color: rgba(230, 182, 79, .45);
+  background: var(--accent-soft);
+}
+.ged-mode.busy { color: var(--accent); animation: ged-pulse .9s ease-in-out infinite; }
+.ged-mode:disabled { cursor: default; }
+@keyframes ged-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+
+/* 没被选中的那一列压暗，两列数字不会看混 */
+.ged-list[data-mode="tcp"] .ged-ms.url,
+.ged-list[data-mode="http"] .ged-ms.tcp { opacity: .45; }
+.ged-list[data-mode="tcp"] .ged-ms.url.none,
+.ged-list[data-mode="http"] .ged-ms.tcp.none { opacity: .3; }
 
 /* 节点菜单里标记「sing-box 当前在用」的那台 */
 .nd-live {

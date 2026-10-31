@@ -2375,12 +2375,22 @@ const Dash = (function () {
     const all = nodesAlive();
     const chosen = new Set(isNew ? all.map((n) => n.name) : (g.nodes || []));
 
-    // 工具栏：筛选 + 已选计数 + 批量操作（都只作用于当前筛选结果）
+    // 工具栏：筛选 + 已选计数 + 两种测速 + 批量操作（都只作用于当前筛选结果）
     const bar = el("div", "ged-bar");
     const filter = el("input", "ged-filter");
     filter.type = "search";
     filter.placeholder = "筛选节点（名字 / 协议）";
     const cnt = el("span", "ged-count", "");
+
+    // TCP / URL 两个测速入口：点一下就地测这批节点，结果直接落到下面两列
+    const chipTcp = el("button", "ged-mode", "TCP");
+    const chipUrl = el("button", "ged-mode", "URL");
+    chipTcp.type = chipUrl.type = "button";
+    chipTcp.title = "TCP 握手（每行左列）：只连节点端口，快，但只证明端口通。"
+      + "点一下测列表里的全部节点，有筛选就只测筛出来的";
+    chipUrl.title = `URL 实测（每行右列）：经节点访问 ${shortUrl(probeUrl())}，真出网的往返耗时。`
+      + "点一下测列表里的全部节点，有筛选就只测筛出来的";
+
     const bAll = el("button", "linkbtn", "全选");
     const bInv = el("button", "linkbtn", "反选");
     const bNone = el("button", "linkbtn", "清空");
@@ -2390,8 +2400,33 @@ const Dash = (function () {
     const bOnly = el("button", "linkbtn", "仅留");
     bOnly.title = "只保留筛选结果里的节点，其余移出本组（先在左边筛一下）";
     bAll.type = bInv.type = bNone.type = bOnly.type = "button";
-    bar.append(filter, cnt, bAll, bInv, bNone, bOnly);
+    bar.append(filter, cnt, chipTcp, chipUrl, bAll, bInv, bNone, bOnly);
     box.appendChild(bar);
+
+    /* 这个分组「URL 实测」到底访问哪里：优先用齿轮里配的探测地址
+       （sing-box 的 urltest 用的就是它），没配就用页面当前的测速目标。 */
+    function probeUrl() {
+      const u = ((g && g.url) || "").trim();
+      if (/^https?:\/\//i.test(u)) return u;
+      return testTarget().url || TEST_TARGETS[0].url;
+    }
+
+    /* 一格延迟：TCP 握手 / URL 实测各占一列，测过才给数字，没测就是「—」 */
+    function paintCell(node, name, mode) {
+      const r = latOf(name, mode);
+      node.classList.toggle("none", !r);
+      node.classList.toggle("ok", !!r && delayKind(r) === "ok");
+      node.classList.toggle("warn", !!r && delayKind(r) === "warn");
+      node.classList.toggle("bad", !!r && delayKind(r) === "bad");
+      node.textContent = r ? msShort(r) : "—";
+      node.title = r ? delayTitle(r)
+        : `${mode === "http" ? "URL 实测" : "TCP 握手"}：还没测过，点这一格就单独测它`;
+    }
+
+    function paintRow(row) {
+      paintCell(row.tcpEl, row.name, "tcp");
+      paintCell(row.urlEl, row.name, "http");
+    }
 
     const list = el("div", "ged-list");
     const rows = [];
@@ -2406,28 +2441,97 @@ const Dash = (function () {
       });
       lab.appendChild(cb);
       lab.appendChild(el("span", "ged-name", n.name));
-      // 选成员时也把两种延迟摆出来，方便「只留快的」这种操作
-      const tcp = latOf(n.name, "tcp");
-      const http = latOf(n.name, "http");
-      const bits = [];
-      if (tcp) bits.push(`TCP ${msShort(tcp)}`);
-      if (http) bits.push(`HTTP ${msShort(http)}`);
-      if (bits.length) {
-        const lat = el("span", "ged-lat", bits.join(" · "));
-        lat.title = [tcp && delayTitle(tcp), http && delayTitle(http)].filter(Boolean).join("\n");
-        lab.appendChild(lat);
-      }
+      const tcpEl = el("span", "ged-ms tcp");
+      const urlEl = el("span", "ged-ms url");
+      lab.append(tcpEl, urlEl);
       lab.appendChild(el("span", "ged-type", n.type || ""));
       lab.setAttribute("data-q", `${n.name} ${n.type || ""}`.toLowerCase());
+      const row = { lab, cb, name: n.name, tcpEl, urlEl };
+      // 点某一格＝只测这一台的这一种，免得为了一个数测全部
+      [["tcp", tcpEl], ["http", urlEl]].forEach(([mode, cell]) => {
+        cell.addEventListener("click", (e) => {
+          e.preventDefault();     // label 里的点击会顺带勾选框，拦掉
+          e.stopPropagation();
+          if (busy) return;
+          testHere(mode, row);
+        });
+      });
+      paintRow(row);
+      rows.push(row);
       list.appendChild(lab);
-      rows.push({ lab, cb, name: n.name });
     });
     if (!all.length) list.appendChild(el("div", "muted", "还没有可用节点，先去「订阅」页添加订阅。"));
     box.appendChild(list);
 
     const visibleRows = () => rows.filter((r) => !r.lab.hidden);
+    // 没筛选就测全部；筛了就只测筛出来的（先筛后测，省时间）
+    const targetRows = () => (filter.value.trim() ? visibleRows() : rows);
+
+    let busy = false;
+
+    /* 焦点是哪一种测速：选中那列给足颜色、另一列压暗，两列数字不至于看混 */
+    function setMode(mode) {
+      chipTcp.classList.toggle("on", mode === "tcp");
+      chipUrl.classList.toggle("on", mode === "http");
+      list.dataset.mode = mode || "";
+    }
+
+    function setBusy(mode, n) {
+      busy = !!mode;
+      chipTcp.disabled = chipUrl.disabled = busy;
+      chipTcp.classList.toggle("busy", mode === "tcp");
+      chipUrl.classList.toggle("busy", mode === "http");
+      chipTcp.textContent = mode === "tcp" ? "TCP…" : "TCP";
+      chipUrl.textContent = mode === "http" ? "URL…" : "URL";
+      [bAll, bInv, bNone, bOnly].forEach((b) => { if (busy) b.disabled = true; });
+      if (busy) cnt.textContent = `测速中 ${n} 个…`;
+    }
+
+    /* 就地测速：结果写回全局缓存（节点页 / 首页用的是同一份），
+       这两列立刻刷新，列表按这次的延迟重排，超时的沉底 */
+    async function testHere(mode, only) {
+      if (busy) return;
+      const names = only ? [only.name] : targetRows().map((r) => r.name);
+      if (!names.length) { toast("当前筛选下没有节点可测"); return; }
+      setBusy(mode, names.length);
+      try {
+        await runNodeTest(names, mode, mode === "http" ? probeUrl() : null, { sort: !only });
+        rows.forEach(paintRow);
+        // 没 Docker 时 URL 实测会被后端降级成 TCP，结果落在 TCP 列，高亮别搞错
+        const used = mode === "http" && !names.some((n) => latOf(n, "http")) ? "tcp" : mode;
+        setMode(used);
+        if (!only) sortRows(used);
+      } catch (e) {
+        toast(`测速失败：${e.message || e}`);
+      } finally {
+        setBusy(null);
+        syncCount();
+      }
+    }
+
+    // 名次：有耗时 → 通但没耗时 → 超时/失败 → 没测过，同档按毫秒升序
+    function sortRows(mode) {
+      const key = (r) => latOf(r.name, mode);
+      const idx = new Map(rows.map((r, i) => [r.name, i]));
+      rows.sort((a, b) => {
+        const ra = key(a), rb = key(b);
+        const ka = delayRank(ra), kb = delayRank(rb);
+        if (ka !== kb) return ka - kb;
+        if (ka === 0 && ra.ms !== rb.ms) return ra.ms - rb.ms;
+        return idx.get(a.name) - idx.get(b.name);
+      });
+      rows.forEach((r) => list.appendChild(r.lab));
+    }
+
+    chipTcp.addEventListener("click", () => testHere("tcp"));
+    chipUrl.addEventListener("click", () => testHere("http"));
+    // 进来先按已有的结果决定高亮哪一列（有 TCP 结果就高亮 TCP）
+    setMode(rows.some((r) => latOf(r.name, "tcp")) || !rows.some((r) => latOf(r.name, "http"))
+      ? "tcp" : "http");
 
     function syncCount() {
+      // 测速过程中计数栏在报进度，别被勾选事件抢回去
+      if (busy) return;
       cnt.textContent = all.length ? `已选 ${chosen.size} / ${all.length}` : "";
       const any = visibleRows().length > 0;
       [bAll, bInv, bNone].forEach((b) => { b.disabled = !any; });
