@@ -362,6 +362,8 @@ table.data th { color: var(--muted); font-weight: 400; }
 .node-card:hover { border-color: var(--muted); }
 /* 正在用的出口：金色边框 + 浅底，和「勾选中」明确区分 */
 .node-card.active { border-color: var(--accent); background: rgba(230,182,79,0.07); box-shadow: 0 0 0 1px var(--accent) inset; }
+/* 出口真正在跑时（使用中）：暖色强调、描边更明显、带一点外发光，和参考图一致 */
+.node-card.inuse { border-color: var(--accent); background: rgba(230,182,79,0.12); box-shadow: 0 0 0 1.5px var(--accent) inset, 0 0 14px rgba(230,182,79,0.18); }
 .node-card.off { opacity: 0.55; }
 .nc-head { display: flex; align-items: center; gap: 6px; }
 .nc-head input[type=checkbox] { flex: 0 0 auto; width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
@@ -382,6 +384,8 @@ table.data th { color: var(--muted); font-weight: 400; }
   flex: 0 0 auto; font-size: 10px; font-weight: 600; letter-spacing: .3px;
   padding: 1px 6px; border-radius: 5px; color: #1a1609; background: var(--accent);
 }
+/* 「使用中」：米白字 + 半透明浅色磨砂胶囊（参考图风格），和「默认」（实心金底）区分开 */
+.nc-def.inuse { color: #f4eede; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.26); }
 .nc-addr { font-size: 11px; color: var(--muted); font-family: var(--mono); }
 .nc-delay { font-size: 13px; font-family: var(--mono); color: var(--muted); align-self: flex-start; }
 /* 三种结果做成同一种小胶囊，避免只有慢/失败着色、好看的反而没底色 */

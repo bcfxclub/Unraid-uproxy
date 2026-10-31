@@ -401,22 +401,23 @@ function renderProbe(p) {
   setRunBadge(anyPath || p.docker_version, anyPath ? "已接入宿主机" : "未识别宿主机");
 }
 
-/* 出口页的节点下拉：把每个节点的测速延迟也写进选项文字，
-   让下拉框像订阅页一样「体现测速」。延迟来自全局 delayTcp / delayHttp。
-   第一项「自动（延迟最低）」对应空值——sing-box 用 urltest 自己挑最快的。 */
+/* 出口页的节点下拉：列出「当前代理组」的成员 + 自动，和「代理分组」页完全一致，
+   选完即写入该分组的当前节点（与分组页的「当前节点」双向同步）。
+   延迟文字来自全局 delayTcp / delayHttp。第一项「自动（延迟最低）」对应空值——
+   sing-box 用 urltest 自己挑最快的。 */
 function renderOutletNodeSelect(cfg) {
   const sel = $("#selNode");
   if (!sel) return;
-  const c = cfg || (STATE && STATE.config) || {};
-  const nodes = (c.outlet && c.outlet.sb_nodes) || [];
-  const prev = sel.value || (c.outlet && c.outlet.sb_node) || "";
+  const g = activeGroup();
+  const members = groupNodes();          // 只列当前分组，和「代理分组」页一致
+  const prev = sel.value || g.node || "";
   clear(sel);
 
   const auto = el("option", "", "自动（延迟最低）");
   auto.value = "";
   sel.appendChild(auto);
 
-  nodes.forEach((n) => {
+  members.forEach((n) => {
     const t = latOf(n.name, "tcp");
     const h = latOf(n.name, "http");
     let lat = "";
@@ -434,7 +435,7 @@ function renderOutletNodeSelect(cfg) {
   });
 
   // 选回原来的项（没测到延迟时也要保留用户选择）
-  if (nodes.some((n) => n.name === prev)) sel.value = prev;
+  if (members.some((n) => n.name === prev)) sel.value = prev;
   else sel.value = "";
 }
 
@@ -1586,7 +1587,7 @@ function testMenuItems() {
 
 function nodeMenuItems(n, anchor) {
   const isOff = nodeDisSet().has(n.name);
-  const isDef = STATE?.config?.outlet?.sb_node === n.name;
+  const isDef = (activeGroup().node || "") === n.name;
   const inGroups = groupsOfNode(n.name);
   return [
     { label: `HTTP 实测（→ ${testTarget().label}）`, onClick: () => safe(() => runNodeTest([n.name], "http"), "测速") },
@@ -1626,12 +1627,21 @@ function renderNodeGrid() {
     return;
   }
   const dis = nodeDisSet();
-  const defaultNode = STATE?.config?.outlet?.sb_node || "";
+  const g0 = activeGroup();
+  const defaultNode = g0.node || "";                 // 已配置为当前分组出口节点
+  let inUse = Dash.inUseNode();                      // 出口真正在跑的那台（自动模式是 sing-box 实时挑的）
+  let inUsePreview = false;                          // 仅为在无 docker 预览环境里预览效果
+  if (!inUse && localStorage.getItem("UPX_PREVIEW_INUSE") === "1" && defaultNode) {
+    inUse = defaultNode; inUsePreview = true;
+  }
   items.forEach((n) => {
     const card = el("div", "node-card");
     const disabled = dis.has(n.name);
     if (disabled) card.classList.add("off");
-    if (defaultNode === n.name) card.classList.add("active");
+    const isUse = inUse === n.name;
+    const isDef = defaultNode === n.name;
+    if (isUse) { card.classList.add("active", "inuse"); }   // 使用中压过默认
+    else if (isDef) { card.classList.add("active"); }
     if (nodeSel.has(n.name)) card.classList.add("sel");
     card.setAttribute("data-n", n.name);
     card.title = disabled
@@ -1650,7 +1660,8 @@ function renderNodeGrid() {
     });
     head.appendChild(chk);
     head.appendChild(el("div", "nc-name", n.name));
-    if (defaultNode === n.name) head.appendChild(el("span", "nc-def", "默认"));
+    if (isUse) head.appendChild(el("span", "nc-def inuse", inUsePreview ? "使用中·预览" : "使用中"));
+    else if (isDef) head.appendChild(el("span", "nc-def", "默认"));
     head.appendChild(dotsBtn((btn) => Pop.toggle(btn, nodeMenuItems(n, btn))));
     head.appendChild(icoDel("删除此节点", () => safe(() => delNodes([n.name]), "删除节点")));
     card.appendChild(head);
@@ -1787,14 +1798,26 @@ function renderNodes() {
     renderNodeGrid();
   }
   // 列表 tbody 始终渲染（隐藏也不影响测速写回）
-  renderNodeTable(nodeCache, cfg?.sb_node || "");
+  renderNodeTable(nodeCache, (activeGroup().node) || "");
   syncTestButtons();
 }
 
-$("#nodeSearch").addEventListener("input", (e) => { nodeState.q = e.target.value; if (nodeState.view === "grid") renderNodeGrid(); else renderNodeTable(nodeCache, STATE?.config?.outlet?.sb_node || ""); });
+$("#nodeSearch").addEventListener("input", (e) => { nodeState.q = e.target.value; if (nodeState.view === "grid") renderNodeGrid(); else renderNodeTable(nodeCache, (activeGroup().node) || ""); });
 $("#nodeSource").addEventListener("change", (e) => { nodeState.source = e.target.value; renderNodes(); });
 $("#btnNodeGrid").addEventListener("click", () => { nodeState.view = "grid"; renderNodes(); });
 $("#btnNodeList").addEventListener("click", () => { nodeState.view = "list"; renderNodes(); });
+
+// 预览「使用中」标记：无 docker 的预览环境里 sing-box 起不来，勾上可预览效果
+(function () {
+  const prevChk = $("#nodePreviewInuse");
+  if (!prevChk) return;
+  prevChk.checked = localStorage.getItem("UPX_PREVIEW_INUSE") === "1";
+  prevChk.addEventListener("change", () => {
+    localStorage.setItem("UPX_PREVIEW_INUSE", prevChk.checked ? "1" : "0");
+    if (nodeState.view === "grid") renderNodeGrid();
+    else renderNodeTable(nodeCache, (activeGroup().node) || "");
+  });
+})();
 
 $("#btnTestTarget").addEventListener("click", (e) => {
   Pop.toggle(e.currentTarget, testMenuItems());
@@ -2290,6 +2313,15 @@ async function sb(action) {
 }
 $("#btnSbStart").addEventListener("click", () => safe(() => sb("start"), "启动 sing-box"));
 $("#btnSbStop").addEventListener("click", () => safe(() => sb("stop"), "停止 sing-box"));
+/* 出口下拉选节点 = 设当前代理组的当前节点，和「代理分组」页同一含义、双向同步。
+   选完立即持久化，不再像以前那样「选了不生效、和分组页对不上」。 */
+$("#selNode").addEventListener("change", () => safe(async () => {
+  const name = $("#selNode").value || "";
+  const d = await api("/api/nodes", "POST", { node: name });
+  if (d.ok === false) { toast(d.message || "切换失败"); return; }
+  toast(name ? `出口固定到「${name}」` : "出口改回自动（延迟最低）");
+  await loadState();
+}, "切换出口节点"));
 
 /* ---------------- 镜像源 ---------------- */
 $("#btnMirrorCheck").addEventListener("click", () => safe(async () => {
@@ -2699,6 +2731,8 @@ const Dash = (function () {
 
   /* ---- 代理组：分组胶囊 + 节点胶囊（照 v2rayA 的做法：选组 → 选节点） ---- */
   let liveNow = "";   // 「自动」时 sing-box 实际在用的节点（由 /api/outlet/stats 带回）
+  let prevInUse = ""; // 上一次判定出的「使用中」节点，变了才重绘网格，避免每 1.5s 抖动
+  let prevRunning = false;
 
   /* 现在真正在用的节点：固定就是固定的；自动优先用 sing-box 报的 now，
      容器没起时退到本组测速最快的那个，只为让人看到「自动」指的是哪台。 */
@@ -3623,14 +3657,35 @@ const Dash = (function () {
 
   function onStats(d) {
     last = d || null;
+    const nowRunning = !!(last && last.running);
     renderCore();
     // 「自动」到底走了哪台：sing-box 的 urltest 自己挑，只有它知道
     const now = (d && d.now) || "";
-    if (now !== liveNow) {
+    const liveChanged = now !== liveNow;
+    if (liveChanged) {
       liveNow = now;
       renderGroup();
     }
+    // 运行状态或「在用节点」变了 → 重绘节点网格的「使用中 / 默认」标记
+    const useNow = inUseNode();
+    if (liveChanged || prevRunning !== nowRunning || useNow !== prevInUse) {
+      prevRunning = nowRunning;
+      prevInUse = useNow;
+      if (typeof renderNodes === "function") renderNodes();
+    }
   }
+
+  /* 当前真正在用的出口节点名：固定看 g.node；自动且容器在跑就看 sing-box 报的 now。
+     没在跑就返回空——没起容器谈不上「使用中」。供节点网格标「使用中」用。 */
+  function inUseNode() {
+    const g = activeGroup();
+    if (!(last && last.running)) return "";
+    if (g.node) return g.node;
+    if (liveNow && (g.nodes || []).includes(liveNow)) return liveNow;
+    return "";
+  }
+
+  function isRunning() { return !!(last && last.running); }
 
   // 延迟/节点变化后由外部调（renderNodes / 测速结束时）
   function onNodes() {
@@ -3639,7 +3694,7 @@ const Dash = (function () {
   }
 
   bind();
-  return { render, onStats, onNodes, refreshStats };
+  return { render, onStats, onNodes, refreshStats, inUseNode, isRunning };
 })();
 
 /* ---------------- 实时流量图（仿 v2rayA） ---------------- */
