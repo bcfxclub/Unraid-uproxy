@@ -1,0 +1,38 @@
+# 只把构建镜像真正需要的文件送进 Docker 构建上下文，其余全部排除
+# Dockerfile 的 COPY 只用到 app/、web/、requirements.txt，下面其余都是冗余，
+# 排除可显著缩小构建上下文与镜像（也避免把 .git、测试、本地日志、密钥状态误打进去）。
+
+# 版本与开发工具
+.git
+.github
+.gitignore
+.vscode
+.idea
+.venv
+venv
+__pycache__
+*.py[cod]
+
+# 本地运行产物与日志
+.fakehost
+.fakestate
+uvicorn.log
+.server.log
+
+# 测试与文档（不进运行镜像）
+tests
+docs
+LICENSE
+
+# 部署/运维脚本（在 Unraid 主机上跑，不属于容器镜像）
+install.sh
+uninstall.sh
+update.sh
+fix-mirror.sh
+docker-compose.yml
+unraid
+
+# 状态目录（含宿主机真实配置与密码，绝不入镜像）
+state
+config
+*.bak

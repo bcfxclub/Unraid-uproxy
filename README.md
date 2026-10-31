@@ -20,9 +20,32 @@ Unraid 上这四个位置互相独立、写法各异、且全在内存里（重�
 
 ## 快速开始
 
-三种方式任选其一，**推荐方式一**（Unraid 默认不带 docker compose，方式二需要你先装 Compose 插件）。
+四种方式任选其一。**已发布到 Docker Hub 后最省事的是方式〇**（直接拉取，无需本地 build）；离线 / 想跟最新代码用方式一。
 
-### 方式一：一键脚本（推荐）
+### 方式〇：从 Docker Hub 拉取（发布后推荐，最简）
+
+镜像已发布到 Docker Hub（命名空间 `bcfxclub`）。Unraid 默认能从 Docker Hub 拉取：
+
+```bash
+# 在 Unraid 终端（或在 Docker 页面填「存储库 bcfxclub/uproxy:latest」+ WebUI http://[IP]:[PORT:8765]/ 手工创建）
+mkdir -p /mnt/user/appdata/uproxy/state
+docker run -d --name uproxy --restart unless-stopped \
+  -p 8765:8765 \
+  -e TZ=Asia/Shanghai -e UPX_USER=admin -e UPX_PASSWORD=换成你的密码 \
+  -e UPX_HOST_ROOT=/host -e UPX_STATE_DIR=/config \
+  -v /boot:/host/boot \
+  -v /etc/docker:/host/etc/docker \
+  -v /usr/local/etc/rc.d:/host/usr/local/etc/rc.d \
+  -v /etc/profile.d:/host/etc/profile.d \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /mnt/user/appdata/uproxy/state:/config \
+  bcfxclub/uproxy:latest
+```
+
+> 拉取后更新只需 `docker pull bcfxclub/uproxy:latest && docker run`（重建容器即可，配置全在 `state` 卷，不丢）。
+> 若 Unraid 拉 Docker Hub 慢/失败，本项目本身就干这个的：先用现有出口或公共镜像源把 dockerd 的 registry-mirrors 配好，再 `docker pull`。
+
+### 方式一：一键脚本（离线 / 跟最新代码推荐）
 
 ```bash
 # 把整个项目目录传到 Unraid 上，然后：
@@ -45,7 +68,8 @@ docker compose up -d --build
 
 把 `unraid/my-uproxy.xml` 拷到 `/boot/config/plugins/dockerMan/templates-user/`，
 再到 Unraid WebUI 的 Docker 页 → Add Container → 模板选 `uproxy`。
-（需先把镜像 `docker build -t uproxy:latest .` 出来）
+模板默认指向 Docker Hub 的 `bcfxclub/uproxy:latest`（方式〇），拉取即用；
+若要本地 build 版本，把模板「存储库」改成 `uproxy:latest` 再 `docker build -t uproxy:latest .`。
 
 ### 访问账号
 
@@ -191,6 +215,42 @@ cd repo && ./update.sh
 - **`docker build` 拉不动基础镜像**（报错 `lookup xxx: no such host`）：daemon.json 里的镜像源域名失效。先 `./fix-mirror.sh` 再重试；都不通就给 dockerd 配 `http_proxy` 走出口。
 - **WebUI 打不开**：确认 Unraid 防火墙/端口映射，`docker ps` 看 uproxy 是否在跑、`8765` 是否映射。
 - **密码不对 / 登不进**：若从没在界面改过密码，重部署后密码以 `install.sh` 打印的为准（已被备份到 `state/.deploy_pw`）；若改过界面密码则永远以 `auth.json` 为准。忘记可删 `state/auth.json` 并重启容器回退到环境变量密码。
+
+### 五、发布到 Docker Hub（维护者）
+
+发布后，Unraid 用户无需本地 build，直接 `docker pull bcfxclub/uproxy` 即可。
+
+**一次性准备（Docker Hub 侧）**
+1. 注册/登录 [Docker Hub](https://hub.docker.com)，确认你的命名空间（如 `bcfxclub`）。
+2. 进入 Profile → Repositories → Create Repository，仓库名填 `uproxy`，类型 Public；访问路径即 `bcfxclub/uproxy`。
+3. 生成 Access Token：Profile → Security & Tokens → Add New Token，勾选 **Read & Write**，复制到安全位置。
+
+**一次性准备（GitHub 侧）**
+4. 仓库 Settings → Secrets and variables → Actions，新建两个 Secret：
+   - `DOCKERHUB_USERNAME` = 你的 Docker Hub 用户名（`bcfxclub`）
+   - `DOCKERHUB_TOKEN` = 上一步生成的 Access Token
+
+**每次发布（推荐：打 tag 自动构建推送）**
+仓库已带 `.github/workflows/publish-dockerhub.yml`，**推送 `v*` tag 时**自动构建 `latest` 与版本号两个镜像并推送到 Docker Hub：
+```bash
+git tag v1.0.0
+git push origin v1.0.0     # GitHub Actions 自动构建并推送
+```
+在仓库 Actions 页可看构建日志；成功后 `docker pull bcfxclub/uproxy:latest` 即最新。
+
+**不依赖 CI 的手动发布（在任意能连 Docker 的机器上）**
+```bash
+# 构建
+docker build -t bcfxclub/uproxy:latest .
+# 打版本号 tag（可选，便于回滚）
+docker tag  bcfxclub/uproxy:latest bcfxclub/uproxy:1.0.0
+# 登录并推送
+docker login            # 用 Docker Hub 用户名 + 密码/Token
+docker push bcfxclub/uproxy:latest
+docker push bcfxclub/uproxy:1.0.0
+```
+
+> 说明：`.dockerignore` 已把 `.git`、测试、文档、本地脚本与状态目录排除，构建上下文只有 `app/ web/ Dockerfile requirements.txt`，镜像保持精简。发布公共镜像后，`unraid/my-uproxy.xml` 与 README「方式〇」即指向 `bcfxclub/uproxy:latest`，用户可直接拉取。
 
 ## 界面
 

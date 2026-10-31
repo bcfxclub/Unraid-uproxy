@@ -3,7 +3,9 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UPX_HOST_ROOT=/host \
-    UPX_STATE_DIR=/config
+    UPX_STATE_DIR=/config \
+    UPX_USER="" \
+    UPX_PASSWORD=""
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
