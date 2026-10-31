@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>uproxy · Unraid 出网加速</title>
-<link rel="stylesheet" href="/static/style.css?v=20">
+<link rel="stylesheet" href="/static/style.css?v=26">
 </head>
 <body>
 
@@ -139,7 +139,7 @@
       </div>
       <div id="pane-singbox" class="pane">
         <h3>出口</h3>
-        <p class="hint" id="sbRouteHint">分流模式将在「订阅」页设置（默认智能分流，保护国内/局域网）。</p>
+        <p class="hint" id="sbRouteHint">分流规则在「订阅」页底部，可自行增删改；启动时会先自检配置，被拒会直接告诉你原因。</p>
         <div class="row">
           <select id="selNode"><option value="">（请先在「订阅」页拉取节点）</option></select>
           <input id="inSbPort" type="number" placeholder="7890" style="max-width:110px">
@@ -219,24 +219,35 @@
       </div>
     </div>
 
-    <div class="card">
-      <h2>分流与高级 <span class="tag">仿 v2rayA 的智能路由</span></h2>
-      <label class="lbl">分流模式</label>
-      <div class="row wrap">
-        <label class="opt"><input type="radio" name="routeMode" value="auto" checked> 智能分流（推荐）：仅 docker/GitHub/CA 等走代理，国内与局域网直连</label>
-        <label class="opt"><input type="radio" name="routeMode" value="all"> 全部走代理（谨慎：会代理所有流量）</label>
-        <label class="opt"><input type="radio" name="routeMode" value="custom"> 自定义</label>
+    <div class="card" id="cardRoute">
+      <h2>分流规则 <span class="tag">从上往下匹配 · 命中即停 · 随便改</span></h2>
+
+      <div class="row wrap rulebar">
+        <button id="btnRuleAdd" class="primary">＋ 加一条规则</button>
+        <button id="btnRulePreset">套用模板 ▾</button>
+        <span class="grow"></span>
+        <input id="inRouteTest" placeholder="测个域名，如 github.com" autocomplete="off">
+        <button id="btnRouteTest">测命中</button>
+        <button id="btnRoutePreview">预览配置</button>
       </div>
-      <div id="customRoute" style="display:none">
-        <label class="lbl">始终直连的域名/后缀（每行一个，如 .cn 或 example.com）</label>
-        <textarea id="inDirect" rows="3" placeholder=".cn&#10;example.com"></textarea>
-        <label class="lbl">始终走代理的域名/后缀</label>
-        <textarea id="inProxyDomains" rows="3" placeholder="github.com&#10;docker.io"></textarea>
+      <div id="routeTestOut" class="hint"></div>
+      <div id="routeSeeded" class="hint" style="display:none">
+        下面这些是从你原来的分流设置自动铺出来的默认规则，<b>点保存才算你的</b>，之后随便改。
       </div>
+
+      <div id="ruleList" class="rulelist"></div>
+      <div id="routeEmpty" class="hint" style="display:none">
+        还没有任何规则。规则表为空时，所有流量都按下面「兜底」处理。
+      </div>
+
+      <div class="row wrap" style="margin-top:12px">
+        <label class="lbl" style="margin:0">规则都没命中时</label>
+        <select id="selRouteFinal"></select>
+        <span class="hint" id="routeFinalHint"></span>
+      </div>
+
       <div class="row wrap" style="margin-top:10px">
         <label class="chk"><input type="checkbox" id="sbTun"> 启用 TUN 透明代理（影响整台主机出网，需 NET_ADMIN）</label>
-      </div>
-      <div class="row wrap">
         <label class="lbl" style="margin:0">订阅自动更新</label>
         <select id="inAutoUpdate">
           <option value="0">关闭</option>
@@ -245,8 +256,12 @@
           <option value="360">每 6 小时</option>
           <option value="720">每 12 小时</option>
         </select>
-        <button id="btnRouteSave" class="primary">保存分流设置</button>
       </div>
+      <div class="row wrap" style="margin-top:10px">
+        <button id="btnRouteSave" class="primary">保存规则</button>
+        <button id="btnRouteSaveApply">保存并重启 sing-box</button>
+      </div>
+      <div id="routeOut" class="out"></div>
     </div>
   </section>
 
@@ -412,6 +427,6 @@
 </div>
 
 <div id="toast" class="toast"></div>
-<script src="/static/app.js?v=20"></script>
+<script src="/static/app.js?v=26"></script>
 </body>
 </html>

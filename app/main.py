@@ -20,6 +20,7 @@ from . import outlets
 from . import persist
 from . import probe
 from . import registry
+from . import route as routing
 from . import settings as S
 from . import state as st
 from . import stats as stats_mod
@@ -77,6 +78,20 @@ class SubReq(BaseModel):
 class OutletReq(BaseModel):
     action: str = "status"
     node: str = ""
+
+
+class RouteReq(BaseModel):
+    rules: list[dict] = Field(default_factory=list)
+    final: str = "direct"
+    restart: bool = False       # 保存后重启 sing-box 让它立即生效
+    preview: bool = False       # 只生成不保存
+
+
+class RouteTestReq(BaseModel):
+    target: str = ""
+    # 带上规则表示「按页面上还没保存的规则算」，方便改一条就立刻验证
+    rules: list[dict] | None = None
+    final: str | None = None
 
 
 class SubAddReq(BaseModel):
@@ -231,6 +246,97 @@ def api_settings(data: dict):
             raise HTTPException(status_code=400, detail=f"出口模式非法: {mode}")
     cfg = st.patch(data)
     return {"ok": True, "config": cfg.model_dump()}
+
+
+# --------------------------------------------------------------------------
+# 分流规则（可编辑、有序、命中即停）
+# --------------------------------------------------------------------------
+def _route_node_names(cfg: st.AppCfg) -> list[str]:
+    disabled = set(cfg.outlet.sb_disabled or [])
+    return [n["name"] for n in cfg.outlet.sb_nodes
+            if n.get("outbound") and n["name"] not in disabled]
+
+
+def _route_state(cfg: st.AppCfg) -> dict:
+    return {
+        "rules": routing.effective(cfg),
+        "final": routing.final_action(cfg),
+        "types": routing.MATCH_TYPES,
+        "actions": routing.ACTIONS,
+        "finals": routing.FINAL_CHOICES,
+        "nodes": _route_node_names(cfg),
+        "presets": [{"key": p["key"], "label": p["label"], "note": p["note"],
+                     "count": sum(len(r["values"]) for r in p["rules"]),
+                     "rules": p["rules"]} for p in routing.PRESETS],
+        # 还没保存过规则表时，页面上显示的是从老配置推出来的默认值
+        "seeded": not bool(cfg.outlet.sb_rules),
+    }
+
+
+@app.get("/api/route", dependencies=[Depends(guard)])
+def api_route_get():
+    return {"ok": True, **_route_state(st.load())}
+
+
+@app.post("/api/route", dependencies=[Depends(guard)])
+def api_route_save(req: RouteReq):
+    cfg = st.load()
+    try:
+        rules, warn = routing.normalize(req.rules, _route_node_names(cfg))
+    except ValueError as e:
+        return {"ok": False, "message": str(e)}
+    final = req.final if req.final in ("direct", "proxy") else "direct"
+
+    # 用同一份 cfg 结构算预览，保证「看到的」就是「浏览器里存的」
+    tmp = cfg.model_copy(deep=True)
+    tmp.outlet.sb_rules = rules
+    tmp.outlet.sb_final = final
+    tmp.outlet.sb_route = "rules"
+
+    if req.preview:
+        ver = outlets.sb_version(tmp.outlet.sb_image)
+        built = routing.build(tmp, modern=ver >= (1, 11))
+        return {"ok": True, "preview": routing.describe(tmp, modern=ver >= (1, 11)),
+                "route": built["route"], "warnings": warn,
+                "version": ".".join(str(x) for x in ver)}
+
+    cfg.outlet.sb_rules = rules
+    cfg.outlet.sb_final = final
+    cfg.outlet.sb_route = "rules"   # 之后一律以规则表为准
+    st.save(cfg)
+    uplog.append("info", "route",
+                 f"分流规则已保存：{len(rules)} 条，未命中时"
+                 f"{'走代理' if final == 'proxy' else '直连'}")
+
+    msg = f"已保存 {len(rules)} 条规则（{sum(len(r['values']) for r in rules)} 个匹配项）"
+    if req.restart:
+        try:
+            r = outlets.sb_start(cfg)
+        except ValueError as e:
+            r = {"ok": False, "message": str(e)}
+        msg += "，sing-box 已按新规则重启" if r.get("ok") else f"；但 sing-box 没能重启：{r.get('message', '')}"
+        uplog.append("info" if r.get("ok") else "error", "singbox", msg)
+    return {"ok": True, "message": msg, "warnings": warn, "rules": rules}
+
+
+@app.post("/api/route/test", dependencies=[Depends(guard)])
+def api_route_test(req: RouteTestReq):
+    cfg = st.load()
+    if req.rules is not None:
+        cfg = cfg.model_copy(deep=True)
+        try:
+            rules, _ = routing.normalize(req.rules, _route_node_names(cfg))
+        except ValueError as e:
+            return {"ok": False, "message": str(e)}
+        cfg.outlet.sb_rules = rules
+        cfg.outlet.sb_route = "rules"
+        if req.final in ("direct", "proxy"):
+            cfg.outlet.sb_final = req.final
+    try:
+        return {"ok": True, **routing.test(req.target, cfg)}
+    except ValueError as e:
+        return {"ok": False, "message": str(e)}
+
 
 
 # --------------------------------------------------------------------------

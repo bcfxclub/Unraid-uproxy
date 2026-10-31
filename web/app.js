@@ -383,10 +383,10 @@ function renderConfig(c) {
   });
   if (c.outlet.sb_node) sel.value = c.outlet.sb_node;
 
-  // 订阅源列表 + 节点管理 + 分流设置
+  // 订阅源列表 + 节点管理 + 分流规则
   renderSubList(c.outlet.subscriptions || []);
   renderNodes();
-  applyRouteUI(c.outlet);
+  Route.boot(c.outlet);
 }
 
 async function loadState() {
@@ -1111,17 +1111,337 @@ $("#btnNodeRestore").addEventListener("click", () => safe(async () => {
   await restoreNodes(back);
 }, "恢复节点"));
 
-function applyRouteUI(outlet) {
-  const mode = outlet.sb_route || "auto";
-  $$(`input[name=routeMode]`).forEach((r) => { r.checked = (r.value === mode); });
-  $("#customRoute").style.display = (mode === "custom") ? "block" : "none";
-  $("#inDirect").value = (outlet.sb_direct || []).join("\n");
-  $("#inProxyDomains").value = (outlet.sb_proxy || []).join("\n");
-  $("#sbTun").checked = !!outlet.sb_tun;
-  $("#inAutoUpdate").value = String(outlet.sb_auto_update || 0);
-  const hint = $("#sbRouteHint");
-  if (hint) hint.textContent = `当前分流模式：${mode === "auto" ? "智能分流（国内/局域网直连，仅目标域名走代理）" : mode === "all" ? "全部走代理（谨慎）" : "自定义"}。`;
-}
+/* ================= 分流规则编辑器 =================
+   规则表是有序的，顺序本身就是配置，所以必须能上移下移。
+   文本域直接绑在模型上（input 即写入），这样重排/删除时
+   重新渲染列表也不会把用户正在输入的内容弄丢。            */
+const Route = (function () {
+  let M = null;          // {rules, final, types, actions, finals, nodes, presets, seeded}
+
+  function opt(sel, value, label) {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = label;
+    sel.appendChild(o);
+    return o;
+  }
+  function typeOf(key) {
+    return (M.types || []).find((t) => t.key === key) || M.types[0];
+  }
+
+  function actionLabel(a) {
+    if (String(a).startsWith("node:")) return `节点：${String(a).slice(5)}`;
+    const f = (M.actions || []).find((x) => x.key === a);
+    return f ? f.label : a;
+  }
+
+  function refreshTun(outlet) {
+    $("#sbTun").checked = !!outlet.sb_tun;
+    $("#inAutoUpdate").value = String(outlet.sb_auto_update || 0);
+  }
+
+  async function load() {
+    const d = await api("/api/route");
+    M = d;
+    render();
+  }
+
+  function render() {
+    // 兜底动作
+    const fs = $("#selRouteFinal");
+    clear(fs);
+    (M.finals || []).forEach((f) => opt(fs, f.key, f.label));
+    fs.value = M.final || "direct";
+    $("#routeFinalHint").textContent = M.final === "proxy"
+      ? "白名单式：只有命中的规则走直连/拦截，其余全部走代理。"
+      : "黑名单式：只有命中的规则走代理，其余全部直连（国内站点不受影响）。";
+
+    const box = $("#ruleList");
+    clear(box);
+    const rules = M.rules || [];
+    $("#routeEmpty").style.display = rules.length ? "none" : "";
+    $("#routeSeeded").style.display = M.seeded ? "" : "none";
+    rules.forEach((r, i) => box.appendChild(row(r, i)));
+  }
+
+  function row(r, i) {
+    const wrap = el("div", "ruleitem" + (r.enabled === false ? " off" : ""));
+    if (r._open) wrap.classList.add("open");
+    const head = el("div", "rulehead");
+
+    // 启用开关
+    const on = document.createElement("input");
+    on.type = "checkbox";
+    on.checked = r.enabled !== false;
+    on.title = "停用后规则保留，但不参与匹配";
+    on.addEventListener("change", () => {
+      r.enabled = on.checked;
+      wrap.classList.toggle("off", !on.checked);
+    });
+    const onWrap = el("label", "chk rule-on");
+    onWrap.appendChild(on);
+    head.appendChild(onWrap);
+
+    head.appendChild(el("span", "rule-no", `#${i + 1}`));
+
+    // 匹配类型
+    const ms = document.createElement("select");
+    ms.className = "rule-match";
+    (M.types || []).forEach((t) => opt(ms, t.key, t.label));
+    ms.value = r.match;
+    ms.title = typeOf(r.match).hint || "";
+    head.appendChild(ms);
+
+    head.appendChild(el("span", "rule-arrow", "→"));
+
+    // 动作
+    const as = document.createElement("select");
+    as.className = "rule-action";
+    (M.actions || []).forEach((a) => opt(as, a.key, a.label));
+    if ((M.nodes || []).length) {
+      const g = document.createElement("optgroup");
+      g.label = "指定节点";
+      (M.nodes || []).forEach((n) => {
+        const o = document.createElement("option");
+        o.value = `node:${n}`;
+        o.textContent = `节点：${n}`;
+        g.appendChild(o);
+      });
+      as.appendChild(g);
+    }
+    // 动作对应的节点可能已被删掉，补一个占位项免得 select 显示成空
+    if (String(r.action).startsWith("node:") && !(M.nodes || []).includes(r.action.slice(5))) {
+      opt(as, r.action, actionLabel(r.action) + "（已失效）");
+    }
+    as.value = r.action;
+    as.addEventListener("change", () => { r.action = as.value; });
+    head.appendChild(as);
+
+    const cnt = el("span", "rule-count", "");
+    head.appendChild(cnt);
+    const spacer = el("span", "grow rule-gap");
+    spacer.title = "点空白处展开 / 收起";
+    head.appendChild(spacer);
+
+    const mk = (txt, title, cls, fn) => {
+      const b = el("button", "ico " + (cls || ""), txt);
+      b.type = "button";
+      b.title = title;
+      b.addEventListener("click", fn);
+      return b;
+    };
+    head.appendChild(mk("↑", "上移（越靠前优先级越高）", "", () => move(i, -1)));
+    head.appendChild(mk("↓", "下移", "", () => move(i, 1)));
+    head.appendChild(mk("✕", "删除这条规则", "danger", () => {
+      M.rules.splice(i, 1);
+      render();
+    }));
+    const fold = mk(r._open ? "▲" : "▼", "展开 / 收起内容", "fold-btn", () => {
+      r._open = !wrap.classList.contains("open");
+      wrap.classList.toggle("open", r._open);
+      fold.textContent = r._open ? "▲" : "▼";
+      if (r._open) {
+        const ta2 = wrap.querySelector(".rule-vals");
+        if (ta2) ta2.focus();
+      }
+    });
+    head.appendChild(fold);
+    spacer.addEventListener("click", () => fold.click());
+    wrap.appendChild(head);
+
+    // 收起时的一行摘要：不展开也知道这条写了什么
+    const sum = el("div", "rule-sum");
+    sum.title = "点一下展开编辑";
+    sum.addEventListener("click", () => fold.click());
+    wrap.appendChild(sum);
+
+    const body = el("div", "rule-body");
+    // 值：一行一个
+    const ta = document.createElement("textarea");
+    ta.className = "rule-vals";
+    ta.value = (r.values || []).join("\n");
+    ta.spellcheck = false;
+    ta.placeholder = typeOf(r.match).ph || "";
+    const autosize = () => {
+      ta.rows = Math.min(8, Math.max(2, ta.value.split("\n").length));
+    };
+    autosize();
+    const sync = () => {
+      r.values = ta.value.split("\n").map((s) => s.trim()).filter(Boolean);
+      cnt.textContent = `${r.values.length} 项`;
+      const vals = r.values;
+      sum.textContent = vals.length
+        ? ` ${vals.slice(0, 3).join("、")}${vals.length > 3 ? ` … 共 ${vals.length} 项` : ""}`
+        : " （还没有填内容，点这里展开）";
+      autosize();
+    };
+    ta.addEventListener("input", sync);
+    sync();
+    body.appendChild(ta);
+
+    const note = el("div", "rule-note");
+    const hintText = () => {
+      const t = typeOf(r.match);
+      note.textContent = `${t.hint}${r.note ? " · " + r.note : ""}`;
+      note.title = note.textContent;
+    };
+    hintText();
+    ms.addEventListener("change", () => {
+      r.match = ms.value;
+      ms.title = typeOf(r.match).hint || "";
+      ta.placeholder = typeOf(r.match).ph || "";
+      hintText();
+    });
+    body.appendChild(note);
+    wrap.appendChild(body);
+    return wrap;
+  }
+
+  function move(i, d) {
+    const j = i + d;
+    if (j < 0 || j >= M.rules.length) return;
+    const t = M.rules[i];
+    M.rules[i] = M.rules[j];
+    M.rules[j] = t;
+    render();
+  }
+
+  function ruleKey(r) {
+    return `${r.match}|${r.action}|${(r.values || []).join(",")}`;
+  }
+
+  function pushRule(rule) {
+    M.rules.push(Object.assign({
+      id: "", enabled: true, match: "domain_suffix", values: [], action: "proxy",
+      note: "", _open: true,
+    }, rule || {}));
+    M.seeded = false;
+  }
+
+  function add(rule) {
+    if (!M) return;
+    pushRule(rule);
+    render();
+    const items = $$("#ruleList .ruleitem");
+    const last = items[items.length - 1];
+    if (last) {
+      last.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      const ta = last.querySelector(".rule-vals");
+      if (ta) ta.focus();
+    }
+  }
+
+  function payload() {
+    if (!M) throw new Error("规则还没加载完，稍等一下");
+    return { rules: M.rules || [], final: M.final || "direct" };
+  }
+
+  async function test() {
+    const t = $("#inRouteTest").value.trim();
+    if (!t) { toast("先填一个域名"); return; }
+    const out = $("#routeTestOut");
+    const d = await api("/api/route/test", "POST", Object.assign({ target: t }, payload()));
+    clear(out);
+    out.appendChild(pill(d.action_text, d.action === "direct" ? "" : d.action === "block" ? "bad" : "ok"));
+    out.appendChild(el("span", "", " " + d.message));
+    if (d.hit) {
+      // 命中的那条如果是收起的，自动展开，让用户看见它到底写了什么
+      const target = (M.rules || [])[d.index - 1];
+      if (target && !target._open) {
+        target._open = true;
+        render();
+      }
+      const node = $$("#ruleList .ruleitem")[d.index - 1];
+      if (node) {
+        document.querySelectorAll("#ruleList .ruleitem.hit").forEach((n) => n.classList.remove("hit"));
+        node.classList.add("hit");
+        node.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      }
+    }
+  }
+
+  async function preview() {
+    const out = $("#routeOut");
+    const d = await api("/api/route", "POST", Object.assign({ preview: true }, payload()));
+    clear(out);
+    (d.preview || []).forEach((line) => out.appendChild(el("div", "mono", line)));
+    out.appendChild(el("div", "hint", `按 sing-box ${d.version || ""} 的语法生成，实际下发内容：`));
+    out.appendChild(pre(JSON.stringify(d.route, null, 2)));
+  }
+
+  async function save(restart) {
+    const out = $("#routeOut");
+    const d = await api("/api/route", "POST", Object.assign({ restart: !!restart }, payload()));
+    // TUN / 自动更新这两项跟规则无关，顺手一起存
+    await api("/api/settings", "POST", {
+      outlet: {
+        sb_tun: $("#sbTun").checked,
+        sb_auto_update: parseInt($("#inAutoUpdate").value || "0", 10) || 0,
+      },
+    });
+    clear(out);
+    out.appendChild(pill("已保存", "ok"));
+    out.appendChild(el("div", "", d.message || ""));
+    (d.warnings || []).forEach((w) => out.appendChild(el("div", "hint", "注意：" + w)));
+    toast(d.message || "分流规则已保存");
+    M.seeded = false;
+    $("#routeSeeded").style.display = "none";
+    await load();
+  }
+
+  let bound = false;
+
+  function boot(outlet) {
+    refreshTun(outlet);
+    if (bound) return;
+    bound = true;
+    load().catch((e) => toast("读取分流规则失败：" + e.message));
+
+    $("#btnRuleAdd").addEventListener("click", () => add());
+    $("#btnRouteTest").addEventListener("click", () => safe(test, "测命中"));
+    $("#inRouteTest").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") safe(test, "测命中");
+    });
+    $("#btnRoutePreview").addEventListener("click", () => safe(preview, "预览配置"));
+    $("#btnRouteSave").addEventListener("click", () => safe(() => save(false), "保存规则"));
+    $("#btnRouteSaveApply").addEventListener("click", () => safe(() => save(true), "保存并重启"));
+    $("#selRouteFinal").addEventListener("change", (e) => {
+      M.final = e.target.value;
+      render();
+    });
+
+    $("#btnRulePreset").addEventListener("click", (e) => {
+      const items = (M.presets || []).map((p) => ({
+        label: `${p.label}（${p.count} 项）`,
+        onClick: () => {
+          // 重复套同一个模板不该越叠越多
+          const seen = new Set(M.rules.map(ruleKey));
+          let added = 0;
+          let skipped = 0;
+          p.rules.forEach((r) => {
+            const copy = JSON.parse(JSON.stringify(r));
+            if (seen.has(ruleKey(copy))) { skipped += 1; return; }
+            pushRule(copy);
+            seen.add(ruleKey(copy));
+            added += 1;
+          });
+          render();
+          if (!added) { toast(`模板「${p.label}」里的规则都已经有了`); return; }
+          toast(`已追加 ${added} 条规则` + (skipped ? `（${skipped} 条重复已跳过）` : ""));
+        },
+      }));
+      if (items.length) items.push({ sep: true });
+      items.push({
+        label: "清空全部规则",
+        danger: true,
+        onClick: () => { M.rules = []; M.seeded = false; render(); },
+      });
+      Pop.open(e.currentTarget, items);
+    });
+  }
+
+  return { boot, load };
+})();
 
 /* 新增订阅表单默认收起，省纵向空间 */
 const subAddWrap = $("#subAddWrap");
@@ -1181,23 +1501,7 @@ $("#btnSubRaw").addEventListener("click", () => safe(async () => {
   loadState();
 }, "解析粘贴内容"));
 
-$$(`input[name=routeMode]`).forEach((r) => r.addEventListener("change", () => {
-  $("#customRoute").style.display = (r.value === "custom") ? "block" : "none";
-}));
-
-$("#btnRouteSave").addEventListener("click", () => safe(async () => {
-  const mode = ($$(`input[name=routeMode]`).find((r) => r.checked) || {}).value || "auto";
-  await api("/api/settings", "POST", {
-    outlet: {
-      sb_route: mode,
-      sb_direct: $("#inDirect").value.split("\n").map((s) => s.trim()).filter(Boolean),
-      sb_proxy: $("#inProxyDomains").value.split("\n").map((s) => s.trim()).filter(Boolean),
-      sb_tun: $("#sbTun").checked,
-      sb_auto_update: parseInt($("#inAutoUpdate").value || "0", 10) || 0,
-    },
-  });
-  toast("分流设置已保存"); loadState();
-}, "保存分流设置"));
+/* 分流规则编辑器自己在 Route.boot() 里挂事件，这里不再需要旧的分流模式单选 */
 
 /* ---------------- sing-box ---------------- */
 async function sb(action) {

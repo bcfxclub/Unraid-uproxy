@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 
 from . import host
+from . import route
 from . import settings as S
 from . import state as st
 
@@ -278,55 +280,40 @@ def warp_precheck(cfg: st.AppCfg) -> dict:
 # --------------------------------------------------------------------------
 # sing-box（订阅选路后的出口）
 # --------------------------------------------------------------------------
-# 出网加速默认要代理的目标域名（docker 镜像 / GitHub / 常见开发源）。
-# 这些域名在「智能分流(auto)」模式下会被强制走节点；其余默认直连，保护国内镜像与局域网。
-BUILTIN_PROXY_SUFFIX = [
-    "docker.io", "registry-1.docker.io", "ghcr.io", "quay.io", "gcr.io",
-    "registry.k8s.io", "k8s.gcr.io", "github.com", "githubusercontent.com",
-    "objects.githubusercontent.com", "raw.githubusercontent.com",
-    "codeload.github.com", "proxy.golang.org", "sum.golang.org", "pypi.org",
-    "registry.npmjs.org", "npmjs.org", "nuget.org", "crates.io",
-    "releases.hashicorp.com", "download.docker.com", "cloudflareclient.com",
-]
-# 国内直连后缀（仅用于 auto 模式的「直连优先」提示，最终兜底仍是 final=direct）
-BUILTIN_DIRECT_SUFFIX = [".cn", ".com.cn", ".中国", ".公司", ".网络"]
+# 具体分流规则已挪到 app/route.py：一张可编辑、有序的规则表。
+# 这里只负责把规则表塞进 sing-box 配置，并处理不同版本之间的语法差异。
 
 
-def _route_block(cfg: st.AppCfg) -> dict:
-    """按分流模式生成 sing-box route 块（sing-box 1.x 语法，用 outbound 指向出站）。
+_VER_CACHE: dict[str, tuple[int, int]] = {}
 
-    auto（默认，安全）：私有网段 / 局域网直连；内置目标域名 + 用户指定域名走代理；
-                      其余一律直连（final=direct），避免把国内流量也代理导致断网。
-    all：除私有网段外，全部走代理（final=select）。谨慎使用。
-    custom：仅按用户填写的 sb_direct / sb_proxy 规则分流，兜底直连。
+
+def sb_version(image: str) -> tuple[int, int]:
+    """探测镜像里的 sing-box 大版本（结果按镜像名缓存）。
+
+    为什么要探：`action: reject` 是 1.11 才有的，而旧的 block 出站 1.13 又被删了。
+    写死任何一种，碰到另一侧版本就是「配置被拒、整个代理起不来」。
+    探测失败时按新版处理（`:latest` 镜像基本上都是新的）。
     """
-    mode = cfg.outlet.sb_route or "auto"
-    rules: list[dict] = []
-    # DNS 与局域网永远直连，防止路由死循环 / 断局域网
-    rules.append({"outbound": "direct", "protocol": "dns"})
-    rules.append({"outbound": "direct", "ip_is_private": True})
-
-    if mode == "all":
-        # 仅当明确选「全部代理」时，把所有非私有流量交给 selector
-        return {"rules": rules, "final": "select", "auto_detect_interface": True}
-
-    # auto / custom 共用：用户显式指定的直连域名始终直连
-    if cfg.outlet.sb_direct:
-        rules.append({"outbound": "direct",
-                      "domain_suffix": list(cfg.outlet.sb_direct)})
-
-    # 需要走代理的域名
-    proxy_domains = list(cfg.outlet.sb_proxy)
-    if mode == "auto":
-        proxy_domains = BUILTIN_PROXY_SUFFIX + proxy_domains
-    if proxy_domains:
-        rules.append({"outbound": "select", "domain_suffix": proxy_domains})
-
-    # 兜底：auto/custom 默认直连（最安全）
-    return {"rules": rules, "final": "direct", "auto_detect_interface": True}
+    img = image or st.OutletCfg().sb_image
+    if img in _VER_CACHE:
+        return _VER_CACHE[img]
+    ver = (1, 11)
+    r = host.docker("run", "--rm", "--network", "none", img, "version", timeout=90)
+    txt = (r.get("out") or "") + (r.get("err") or "")
+    m = re.search(r"version\s+(\d+)\.(\d+)", txt, re.I) or re.search(r"(\d+)\.(\d+)\.\d+", txt)
+    if r.get("rc") == 0 and m:
+        ver = (int(m.group(1)), int(m.group(2)))
+    _VER_CACHE[img] = ver
+    return ver
 
 
-def _sb_config(cfg: st.AppCfg) -> dict:
+def _sb_config(cfg: st.AppCfg, version: tuple[int, int] | None = None,
+               select_tag: str = "select") -> dict:
+    ver = version or sb_version(cfg.outlet.sb_image)
+    modern = ver >= (1, 11)      # 规则动作用 action: reject
+    new_dns = ver >= (1, 12)     # 旧 DNS 服务器写法在 1.14 被删，1.12 起用 type+server
+    new_tun = ver >= (1, 10)     # tun 的 inet4_address 并入 address
+
     disabled = set(cfg.outlet.sb_disabled or [])
     nodes = [n for n in cfg.outlet.sb_nodes
              if n.get("outbound") and n.get("name") not in disabled]
@@ -344,57 +331,123 @@ def _sb_config(cfg: st.AppCfg) -> dict:
         "listen_port": cfg.outlet.sb_port,
     }]
     if cfg.outlet.sb_tun:
-        inbounds.insert(0, {
+        tun = {
             "type": "tun",
             "tag": "tun-in",
             "interface_name": "tun0",
-            "inet4_address": "172.19.0.1/30",
             "auto_route": True,
             "strict_route": True,
             "stack": "system",
-        })
+        }
+        tun["address" if new_tun else "inet4_address"] = (
+            ["172.19.0.1/30"] if new_tun else "172.19.0.1/30")
+        if not modern:
+            # 1.11 起嗅探改由规则动作负责，见 route.build()
+            tun["sniff"] = True
+        inbounds.insert(0, tun)
+
+    if new_dns:
+        dns_block = {"servers": [
+            {"type": "udp", "tag": "ali", "server": "223.5.5.5"},
+            {"type": "udp", "tag": "dnspod", "server": "119.29.11.11"},
+        ], "final": "ali"}
+    else:
+        dns_block = {"servers": [{"address": "223.5.5.5"}, {"address": "119.29.11.11"}],
+                     "final": "223.5.5.5"}
+
+    built = route.build(cfg, modern=modern, select_tag=select_tag)
+    outbounds = [
+        {"type": "selector", "tag": select_tag, "outbounds": tags, "default": selected},
+        *[n["outbound"] for n in nodes],
+        {"type": "direct", "tag": "direct"},
+    ]
+    if built["need_block"]:
+        # 只有 ≤1.10 的老镜像才会走到这里（1.13 起 block 出站已被移除）
+        outbounds.append({"type": "block", "tag": "block"})
 
     conf: dict = {
         "log": {"level": "warn"},
-        # 原生 api：供 WebUI 拉取实时连接数（只在 uproxy-net 内可达，不暴露到宿主）
-        "api": {"listen": "0.0.0.0:9099", "token": "uproxy"},
+        # Clash API：WebUI 用它拉实时连接数（统计面板的 /connections）。
+        # 只在 uproxy-net 内可达，不映射到宿主机。
+        "experimental": {
+            "clash_api": {"external_controller": "0.0.0.0:9099", "secret": "uproxy"},
+        },
         # 解析走公共 DNS 直连，避免路由死循环
-        "dns": {"servers": [{"address": "223.5.5.5"}, {"address": "119.29.11.11"}],
-                "final": "223.5.5.5"},
+        "dns": dns_block,
         "inbounds": inbounds,
-        "outbounds": [
-            {"type": "selector", "tag": "select", "outbounds": tags, "default": selected},
-            *[n["outbound"] for n in nodes],
-            {"type": "direct", "tag": "direct"},
-        ],
-        "route": _route_block(cfg),
+        "outbounds": outbounds,
+        "route": built["route"],
     }
     return conf
+
+
+CONF_IN_CONTAINER = "/sb-config.json"
+
+
+def _stage_conf(conf: dict):
+    """把配置落到状态目录留档（便于事后排查），并返回路径。"""
+    SB_CONF_DIR.mkdir(parents=True, exist_ok=True)
+    path = SB_CONF_DIR / "config.json"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(conf, f, ensure_ascii=False, indent=2)
+    return path
+
+
+def _run_with_conf(name: str, image: str, conf: dict, cmd: list[str],
+                   extra: list[str] | None = None, detach: bool = False,
+                   network: str = NET, timeout: int = 180) -> dict:
+    """create -> docker cp 配置 -> start。
+
+    不能用 `-v` 挂载配置目录：docker 守护进程跑在**宿主机**上，`-v` 的源路径
+    必须写宿主机路径，而容器里的 /config 在宿主机上并不存在 —— docker 会照着
+    这个名字在宿主机凭空建一个空目录挂进去，sing-box 读到的是空目录，
+    于是「容器起来了、日志里说找不到配置、然后不停重启」。
+    docker cp 不经过宿主机路径解析，最稳。
+    """
+    path = _stage_conf(conf)
+    host.docker("rm", "-f", name, timeout=60)
+    net_args = ["--network", network] if network else []
+    r = host.docker("create", "--name", name, *net_args,
+                    *(extra or []), image, *cmd, timeout=120)
+    if r["rc"] != 0:
+        return r
+    r = host.docker("cp", str(path), f"{name}:{CONF_IN_CONTAINER}", timeout=60)
+    if r["rc"] != 0:
+        host.docker("rm", "-f", name, timeout=30)
+        return r
+    if detach:
+        return host.docker("start", name, timeout=timeout)
+    out = host.docker("start", "-a", name, timeout=timeout)
+    host.docker("rm", "-f", name, timeout=60)
+    return out
+
+
+def sb_check(cfg: st.AppCfg, conf: dict | None = None) -> dict:
+    """用目标镜像自带的 `sing-box check` 先验证一遍配置，避免起一个秒退的容器。"""
+    conf = conf if conf is not None else _sb_config(cfg)
+    r = _run_with_conf(f"{SB_NAME}-check", cfg.outlet.sb_image, conf,
+                       ["check", "-c", CONF_IN_CONTAINER],
+                       network="none", timeout=150)
+    msg = (r.get("err") or r.get("out") or "").strip()
+    return {"ok": r["rc"] == 0, "message": msg[:800]}
 
 
 def sb_start(cfg: st.AppCfg) -> dict:
     _ensure_net()
     conf = _sb_config(cfg)
-    SB_CONF_DIR.mkdir(parents=True, exist_ok=True)
-    conf_path = SB_CONF_DIR / "config.json"
-    with open(conf_path, "w", encoding="utf-8") as f:
-        json.dump(conf, f, ensure_ascii=False, indent=2)
 
-    host.docker("rm", "-f", SB_NAME, timeout=30)
-    args = [
-        "run", "-d", "--name", SB_NAME, "--restart", "unless-stopped",
-        "--network", NET,
-        "-v", f"{SB_CONF_DIR}:/etc/sing-box",
-    ]
+    # 先校验再启动：配置被拒时容器会不停重启，用户只会看到「启动了但连不上」
+    chk = sb_check(cfg, conf)
+    if not chk["ok"]:
+        return {"ok": False, "message": "sing-box 拒绝了这份配置：" + (chk["message"] or "未知原因")}
+
+    extra = ["--restart", "unless-stopped"]
     if cfg.outlet.sb_tun:
         # TUN 透明代理需要内核 tun 设备与网络管理权限
-        args += ["--cap-add", "NET_ADMIN", "--device", "/dev/net/tun",
-                 "--sysctl", "net.ipv4.ip_forward=1"]
-    args += [
-        cfg.outlet.sb_image,
-        "-c", "/etc/sing-box/config.json", "run",
-    ]
-    r = host.docker(*args, timeout=180)
+        extra += ["--cap-add", "NET_ADMIN", "--device", "/dev/net/tun",
+                  "--sysctl", "net.ipv4.ip_forward=1"]
+    r = _run_with_conf(SB_NAME, cfg.outlet.sb_image, conf,
+                       ["-c", CONF_IN_CONTAINER, "run"], extra=extra, detach=True)
     if r["rc"] != 0:
         return {"ok": False, "message": (r["err"] or r["out"] or "启动失败")[:800]}
     return {"ok": True, "message": "sing-box 出口已启动",

@@ -511,3 +511,61 @@ table.data th { color: var(--muted); font-weight: 400; }
 .fold.open { display: block; }
 .foldbar { margin-top: 10px; }
 .foldbar button.mini { padding: 5px 12px; font-size: 12px; }
+
+/* ---------------- 分流规则编辑器 ---------------- */
+.grow { flex: 1; min-width: 0; }
+.rulebar { gap: 8px; }
+.rulebar input#inRouteTest { min-width: 0; width: 210px; }
+
+.rulelist { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.ruleitem {
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--card-2); padding: 9px 10px 8px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.ruleitem.off { opacity: .55; }
+.ruleitem.hit { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.rulehead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rulehead .rule-on { margin: 0; }
+.rule-no {
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
+  min-width: 26px; text-align: right;
+}
+.rulehead select { min-width: 0; padding: 5px 8px; font-size: 12.5px; }
+.rulehead select.rule-match { width: 118px; }
+.rulehead select.rule-action { width: 132px; }
+.rule-arrow { color: var(--muted); font-size: 12px; }
+.rule-count { font-size: 11.5px; color: var(--muted); font-family: var(--mono); }
+.ruleitem .ico {
+  width: 26px; height: 26px; padding: 0; line-height: 1;
+  font-size: 12px; color: var(--muted); background: transparent;
+  border-color: transparent;
+}
+.ruleitem .ico:hover { color: var(--text); background: var(--card); border-color: var(--line); }
+.ruleitem .ico.danger:hover { color: var(--bad); background: var(--bad-soft); border-color: rgba(224,106,90,.35); }
+
+.rule-vals {
+  width: 100%; margin-top: 7px; padding: 7px 9px; border-radius: 8px;
+  background: var(--bg); border: 1px solid var(--line); color: var(--text);
+  font-family: var(--mono); font-size: 12px; line-height: 1.5; resize: vertical;
+}
+.rule-vals:focus { border-color: var(--accent); }
+.rule-note {
+  margin-top: 5px; font-size: 11.5px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* 规则默认收起成一行摘要，点开才展开文本域——否则六条规则就能占满两屏 */
+.rule-body { display: none; }
+.ruleitem.open .rule-body { display: block; }
+.rule-sum {
+  display: none; margin-top: 6px; cursor: pointer;
+  font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rule-item.open .rule-sum, .ruleitem.open .rule-sum { display: none; }
+.ruleitem:not(.open) .rule-sum { display: block; }
+.rule-sum:hover { color: var(--text); }
+.ruleitem .ico.fold-btn { font-size: 12px; color: var(--text); width: 24px; }
+.ruleitem .ico.fold-btn:hover { background: var(--card); }
+.grow.rule-gap { cursor: pointer; min-height: 22px; }

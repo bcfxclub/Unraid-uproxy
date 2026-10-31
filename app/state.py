@@ -49,9 +49,14 @@ class OutletCfg(BaseModel):
     subscriptions: list[dict[str, Any]] = Field(default_factory=list)
 
     # 分流模式：auto(默认，国内外分流，保护局域网/国内镜像) / all(全部走代理) / custom(自定义)
+    # 仅用于兼容旧配置：一旦 sb_rules 里有内容，就以规则表为唯一事实来源。
     sb_route: str = "auto"
     sb_direct: list[str] = Field(default_factory=list)   # 始终直连的域名/后缀/IP段
     sb_proxy: list[str] = Field(default_factory=list)    # 始终走代理的域名/后缀
+
+    # 分流规则表（可编辑、有序、命中即停）：{id,enabled,match,values,action,note}
+    sb_rules: list[dict[str, Any]] = Field(default_factory=list)
+    sb_final: str = "direct"      # 全部规则都没命中时的兜底：direct / proxy
 
     sb_tun: bool = False        # TUN 透明代理（需 NET_ADMIN，影响整台主机出网，默认关）
     sb_auto_update: int = 0     # 订阅自动更新间隔（分钟），0=关闭
