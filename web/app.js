@@ -1005,7 +1005,8 @@ async function runNodeTest(names, mode, url, opts) {
   renderNodes();
   Dash.onNodes();          // 首页「代理组 / 节点延迟」两张卡跟着刷新
   if (sorted) saved = await saveNodeOrder();
-  if (opt.silent) return;
+  // 返回原始响应：静默补测要靠 d.mode / d.note 判断是不是被降级了
+  if (opt.silent) return d;
 
   const up = res.filter((r) => r.reachable);
   if (one) {
@@ -2355,6 +2356,9 @@ const Dash = (function () {
     return items;
   }
 
+  /* 本机能不能做 URL 实测：被后端降级过一次就别再反复试（换页面就重算） */
+  let httpBlocked = false;
+
   /* 分组编辑弹窗：改名 + 勾选成员（支持全选 / 反选 / 清空 / 筛选，不用一个个点） */
   function openGroupEditor(g) {
     const isNew = !g;
@@ -2387,10 +2391,10 @@ const Dash = (function () {
     const chipTcp = el("button", "ged-mode", "TCP");
     const chipUrl = el("button", "ged-mode", "URL");
     chipTcp.type = chipUrl.type = "button";
-    chipTcp.title = "TCP 握手（每行左列）：只连节点端口，快，但只证明端口通。"
-      + "点一下测列表里的全部节点（勾没勾都测），有筛选就只测筛出来的";
-    chipUrl.title = `URL 实测（每行右列）：经节点访问 ${shortUrl(probeUrl())}，真出网的往返耗时。`
-      + "点一下测列表里的全部节点（勾没勾都测），有筛选就只测筛出来的";
+    chipTcp.title = "TCP 握手（左列数字）：只连节点端口，快，但只证明端口通。"
+      + "打开弹窗会自动测好；点一下＝重测列表里的全部节点（勾没勾都测）";
+    chipUrl.title = `URL 实测（右列数字）：经节点访问 ${shortUrl(probeUrl())} 的真实往返耗时。`
+      + "打开弹窗会自动测好；点一下＝重测列表里的全部节点（勾没勾都测）";
 
     const bAll = el("button", "linkbtn", "全选");
     const bInv = el("button", "linkbtn", "反选");
@@ -2412,16 +2416,14 @@ const Dash = (function () {
       return testTarget().url || TEST_TARGETS[0].url;
     }
 
-      /* 一格延迟：TCP 握手 / URL 实测各占一列，测过才给数字，没测就是「—」 */
+    /* 一格延迟：TCP 握手 / URL 实测各占一列，测过才给数字，没测就是「—」 */
     function paintCell(node, name, mode) {
       const r = latOf(name, mode);
       node.classList.toggle("none", !r);
       node.classList.toggle("ok", !!r && delayKind(r) === "ok");
       node.classList.toggle("warn", !!r && delayKind(r) === "warn");
       node.classList.toggle("bad", !!r && delayKind(r) === "bad");
-      clear(node);
-      node.appendChild(el("i", "tag", mode === "http" ? "URL" : "TCP"));
-      node.appendChild(document.createTextNode(r ? msShort(r) : "—"));
+      node.textContent = r ? msShort(r) : "—";
       node.title = r ? delayTitle(r)
         : `${mode === "http" ? "URL 实测" : "TCP 握手"}：还没测过，点这一格就单独测它`;
     }
@@ -2473,11 +2475,10 @@ const Dash = (function () {
     let busy = false;       // 手动测速中
     let autoProbe = null;   // 打开弹窗时的补测（Promise，手动测速排在它后面）
 
-    /* 焦点是哪一种测速：选中那列给足颜色、另一列压暗，两列数字不至于看混 */
+    /* 焦点是哪一种测速：只用来标一下刚才测的是哪列（两列数字都照常显示） */
     function setMode(mode) {
       chipTcp.classList.toggle("on", mode === "tcp");
       chipUrl.classList.toggle("on", mode === "http");
-      list.dataset.mode = mode || "";
     }
 
     function setBusy(mode, n) {
@@ -2535,15 +2536,30 @@ const Dash = (function () {
     setMode(rows.some((r) => latOf(r.name, "tcp")) || !rows.some((r) => latOf(r.name, "http"))
       ? "tcp" : "http");
 
-    /* 打开弹窗就补测一轮：进页面时只测过「当前分组」那些节点，
-       列表里没勾的（不在本组）还是空的，没法比较着挑。这里把缺的一起补上：
-       只补没测过的、只做 TCP 握手、不写日志，也不动列表顺序。 */
-    const missing = rows.filter((r) => !latOf(r.name, "tcp")).map((r) => r.name);
-    if (missing.length) {
-      cnt.textContent = `补测 ${missing.length} 个…`;
-      autoProbe = runNodeTest(missing, "tcp", null, { silent: true, quiet: true })
-        .then(() => rows.forEach(paintRow))
-        .catch(() => { /* 补测失败就保持原样，不影响选成员 */ })
+    /* 打开弹窗就把两列都填上：进页面只测过「当前分组」的节点，
+       列表里没勾的（不在本组）还是空的，而且 URL 实测以前还得单独点一次。
+       这里按缺什么补什么：先握手（快，数字先出来），再实测 URL；都不写日志、不动顺序。
+       没有 Docker 的环境 URL 会被后端降级成 TCP，那种情况记下来，本次会话不再重试。 */
+    const missTcp = rows.filter((r) => !latOf(r.name, "tcp")).map((r) => r.name);
+    const missUrl = httpBlocked ? []
+      : rows.filter((r) => !latOf(r.name, "http")).map((r) => r.name);
+    if (missTcp.length || missUrl.length) {
+      autoProbe = (async () => {
+        if (missTcp.length) {
+          cnt.textContent = `补测 TCP ${missTcp.length} 个…`;
+          await runNodeTest(missTcp, "tcp", null, { silent: true, quiet: true });
+          rows.forEach(paintRow);
+        }
+        if (missUrl.length) {
+          cnt.textContent = `补测 URL ${missUrl.length} 个…`;
+          const d = await runNodeTest(missUrl, "http", probeUrl(), { silent: true, quiet: true });
+          rows.forEach(paintRow);
+          // 被降级成 TCP 且原因是没 Docker → 本次会话别再反复试；
+          // 只是「上一次实测还在跑」这种偶发冲突就不记，下次开弹窗再补
+          const note = (d && d.note) || "";
+          if (d && d.mode !== "http" && /docker/i.test(note)) httpBlocked = true;
+        }
+      })().catch(() => { /* 补测失败就保持原样，不影响选成员 */ })
         .finally(() => { autoProbe = null; syncCount(); });
     }
 

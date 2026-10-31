@@ -895,17 +895,14 @@ table.data th { color: var(--muted); font-weight: 400; }
   padding-right: 28px;
 }
 
-/* 编辑弹窗里每行的延迟：TCP / URL 各占一列（不再挤成一串） */
+/* 编辑弹窗里每行的延迟：TCP / URL 各占一列，数字本身不再带前缀
+   （哪一列是什么由上方 TCP / URL 两个胶囊标明） */
 .ged-ms {
   font-size: 10.5px; color: var(--muted); font-family: var(--mono);
   text-align: right; white-space: nowrap; overflow: hidden;
   cursor: pointer; opacity: .95;
 }
-.ged-ms .tag {
-  font-style: normal; font-size: 9px; opacity: .55;
-  letter-spacing: .2px; margin-right: 3px;
-}
-.ged-ms.none { opacity: .5; }
+.ged-ms.none { opacity: .45; }
 .ged-ms.ok { color: var(--ok); }
 .ged-ms.warn { color: var(--warn); }
 .ged-ms.bad { color: var(--bad); }
@@ -947,7 +944,7 @@ table.data th { color: var(--muted); font-weight: 400; }
    名称自己省略、右侧固定宽，65 个节点也不会把协议挤出弹窗 */
 .ged-item {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 66px 66px 52px;
+  grid-template-columns: auto minmax(0, 1fr) 54px 54px 52px;
   align-items: center;
   gap: 8px;
 }
@@ -973,12 +970,6 @@ table.data th { color: var(--muted); font-weight: 400; }
 .ged-mode.busy { color: var(--accent); animation: ged-pulse .9s ease-in-out infinite; }
 .ged-mode:disabled { cursor: default; }
 @keyframes ged-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
-
-/* 没被选中的那一列压暗，两列数字不会看混 */
-.ged-list[data-mode="tcp"] .ged-ms.url,
-.ged-list[data-mode="http"] .ged-ms.tcp { opacity: .45; }
-.ged-list[data-mode="tcp"] .ged-ms.url.none,
-.ged-list[data-mode="http"] .ged-ms.tcp.none { opacity: .3; }
 
 /* 节点菜单里标记「sing-box 当前在用」的那台 */
 .nd-live {
