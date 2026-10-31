@@ -405,6 +405,16 @@ def api_restore(req: RestoreReq):
     return {"ok": True, "message": f"已还原 {path}", "backup": bk}
 
 
+@app.post("/api/targets/reset", dependencies=[Depends(guard)])
+def api_target_reset(req: RestoreReq):
+    """把某个下发目标恢复到 uproxy 改动前的默认配置。"""
+    try:
+        r = targets.reset_target(req.key, st.load())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, **r}
+
+
 @app.post("/api/uninstall", dependencies=[Depends(guard)])
 def api_uninstall():
     return {"ok": True, "go": persist.remove_block(st.load())}

@@ -301,6 +301,8 @@ async function copyText(text) {
 
 /* ---------------- tabs（侧边栏） ---------------- */
 const TITLES = { overview: "仪表板", outlet: "出口", subs: "订阅", push: "下发", backup: "备份与还原", logs: "日志", account: "账号", docs: "文档" };
+let BOOTED = false;
+
 function switchTab(name) {
   const btn = $$(".nav button").find((x) => x.dataset.tab === name);
   if (!btn) return;
@@ -310,6 +312,8 @@ function switchTab(name) {
   $(`#tab-${name}`).classList.add("on");
   $("#pageTitle").textContent = TITLES[name] || name;
   history.replaceState(null, "", `?${new URLSearchParams({ tab: name }).toString()}`);
+  // 切到首页仪表板时，连通性体检立刻测一次（自动刷新已在跑则重置计时）
+  if (BOOTED && name === "dash") startHealthLoop();
 }
 
 $$(".nav button").forEach((b) => b.addEventListener("click", () => switchTab(b.dataset.tab)));
@@ -440,13 +444,33 @@ bindSave("#emhttpProxy", (n) => ({ emhttp_proxy: n.checked }));
   bindSave(`#t-${k}`, (n) => ({ targets: { [k]: n.checked } }));
 });
 
-/* ---------------- 体检 ---------------- */
-$("#btnHealth").addEventListener("click", () => safe(async () => {
+/* ---------------- 连通性体检（打开即自动测，间隔可改并记住） ---------------- */
+const HEALTH_INT_KEY = "upx_health_int";
+let healthTimer = null;
+
+function healthIntervalVal() {
+  let v = 30000;   // 默认 30s
+  try {
+    const s = parseInt(localStorage.getItem(HEALTH_INT_KEY) || "", 10);
+    if (!isNaN(s) && s >= 0) v = s;
+  } catch (e) { /* 忽略 */ }
+  return v;
+}
+
+async function runHealth() {
   const out = $("#healthOut");
+  if (!out) return;
   clear(out);
   out.appendChild(el("div", "hint", "正在探测…"));
-  const proxy = $("#healthViaProxy").checked ? (STATE.probe.outlet_url || "") : "";
-  const d = await api(`/api/health?proxy=${encodeURIComponent(proxy)}`);
+  const proxy = $("#healthViaProxy").checked ? (STATE?.probe?.outlet_url || "") : "";
+  let d;
+  try {
+    d = await api(`/api/health?proxy=${encodeURIComponent(proxy)}`);
+  } catch (e) {
+    clear(out);
+    out.appendChild(el("div", "hint bad", `体检失败：${e.message}`));
+    return;
+  }
   clear(out);
   const table = el("table", "data");
   const tr = el("tr");
@@ -465,7 +489,42 @@ $("#btnHealth").addEventListener("click", () => safe(async () => {
   });
   out.appendChild(table);
   if (!proxy) out.appendChild(el("div", "hint", "勾选「同时测走代理」可对比加速效果。"));
+  const foot = $("#healthFoot");
+  if (foot) { foot.style.display = ""; foot.textContent = `最近更新 ${new Date().toLocaleTimeString()}`; }
+}
+
+function startHealthLoop() {
+  stopHealthLoop();
+  const ms = healthIntervalVal();
+  const sel = $("#healthInt");
+  if (sel) sel.value = String(ms);
+  if (!ms) return;                       // 0 = 关闭自动刷新
+  runHealth().catch(() => {});            // 打开/切换即先测一次
+  healthTimer = setInterval(() => {
+    if (document.hidden) return;          // 后台标签页不白跑
+    runHealth().catch(() => {});
+  }, ms);
+}
+
+function stopHealthLoop() {
+  if (healthTimer) { clearInterval(healthTimer); healthTimer = null; }
+}
+
+$("#btnHealth").addEventListener("click", () => safe(async () => {
+  await runHealth();
+  startHealthLoop();                      // 手动点一下：立即测并重置计时
 }, "体检"));
+
+const healthIntSel = $("#healthInt");
+if (healthIntSel) {
+  healthIntSel.value = String(healthIntervalVal());
+  healthIntSel.addEventListener("change", () => {
+    const ms = parseInt(healthIntSel.value, 10) || 0;
+    try { localStorage.setItem(HEALTH_INT_KEY, String(ms)); } catch (e) { /* 忽略 */ }
+    startHealthLoop();
+    toast(ms ? `已设为每 ${ms / 1000}s 自动体检` : "已关闭自动体检");
+  });
+}
 
 /* ---------------- 出口探测 ---------------- */
 $("#btnProbe").addEventListener("click", () => safe(async () => {
@@ -968,6 +1027,99 @@ function setTestTarget(t) {
   try { localStorage.setItem(TEST_TARGET_KEY, JSON.stringify(t)); } catch (e) { /* 隐私模式忽略 */ }
 }
 
+/* 用户自定义探测网址：持久化成一个列表，可在下拉里增删。
+   预置的 Google/GitHub/Cloudflare 是写死的，自定义的是用户自己的，单独存一份。 */
+const TEST_TARGETS_CUSTOM_KEY = "upx_test_targets";
+
+function customTargets() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(TEST_TARGETS_CUSTOM_KEY) || "[]");
+    return Array.isArray(arr) ? arr.filter((x) => x && x.url) : [];
+  } catch (e) { return []; }
+}
+
+function setCustomTargets(arr) {
+  try { localStorage.setItem(TEST_TARGETS_CUSTOM_KEY, JSON.stringify(arr || [])); } catch (e) { /* 忽略 */ }
+}
+
+/* 新增一个自定义地址；已存在（同地址，忽略末尾斜杠/大小写）则不再重复添加。返回新增项。 */
+function addCustomTarget(raw) {
+  let u = (raw || "").trim();
+  if (!u) return null;
+  if (!/^https?:\/\//i.test(u)) u = "https://" + u;
+  const list = customTargets().filter((x) => !sameUrl(x.url, u));
+  const item = { label: shortUrl(u), url: u };
+  list.push(item);
+  setCustomTargets(list);
+  return item;
+}
+
+function delCustomTarget(u) {
+  setCustomTargets(customTargets().filter((x) => !sameUrl(x.url, u)));
+}
+
+/* 兼容旧版：以前把单个自定义地址直接当“当前目标”，没登记进列表。
+   升级后把它补登记，免得它在下拉里显示不出来。 */
+function migrateCustomTargets() {
+  const list = customTargets();
+  const cur = testTarget();
+  if (!cur.tcp && cur.url && !TEST_TARGETS.some((t) => t.url === cur.url)
+      && !list.some((x) => sameUrl(x.url, cur.url))) {
+    list.push({ label: cur.label || shortUrl(cur.url), url: cur.url });
+    setCustomTargets(list);
+  }
+}
+
+/* 下拉里“添加自定义地址”的流程：填地址 → 加入列表 → 立刻选它为当前目标 */
+async function addCustomTargetFlow() {
+  const v = await Modal.ask({
+    title: "添加自定义探测地址",
+    note: "填一个能正常返回内容的 https 地址；测的是「经该节点访问它」的往返耗时。添加后会出现在下拉里，可随时删除。",
+    value: "",
+    placeholder: "https://www.google.com/",
+    okText: "添加并用它",
+  });
+  if (!v) return;
+  const item = addCustomTarget(v.value);
+  if (!item) { toast("地址无效，未添加"); return; }
+  setTestTarget(item);
+  syncTestButtons();
+  toast(`已添加 ${shortUrl(item.url)}，点「测速」开始`);
+}
+
+/* 下拉菜单里的一行：左边是选择按钮，自定义行右边带一个删除。 */
+function targetRow(t, isSel, onSelect) {
+  const row = el("div", "trow");
+  const b = el("button", isSel ? "sel" : "", (isSel ? "✓ " : "　") + t.label);
+  b.title = t.url || (t.tcp ? "只测端口可达，不验证能否出网" : "");
+  b.addEventListener("click", () => { Pop.close(); onSelect(); });
+  row.appendChild(b);
+  return row;
+}
+
+function customTargetRow(t, isSel, onSelect) {
+  const row = el("div", "trow trow-custom");
+  const b = el("button", isSel ? "sel" : "", (isSel ? "✓ " : "　") + t.label);
+  b.title = t.url;
+  b.addEventListener("click", () => { Pop.close(); onSelect(); });
+  row.appendChild(b);
+  const del = el("button", "trow-del", "✕");
+  del.title = "删除这个自定义地址";
+  del.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!confirm(`删除自定义探测地址 ${shortUrl(t.url)}？`)) return;
+    const cur = testTarget();
+    delCustomTarget(t.url);
+    // 删掉的正好是当前选中的，退回到 TCP 握手
+    if (!cur.tcp && sameUrl(cur.url, t.url)) setTestTarget({ tcp: true });
+    syncTestButtons();
+    Pop.close();
+    setTimeout(() => Pop.open($("#btnTestTarget"), testMenuItems()), 0);
+  });
+  row.appendChild(del);
+  return row;
+}
+
 /* 把当前目标同步到工具栏两个按钮上 */
 function syncTestButtons() {
   const t = testTarget();
@@ -1224,37 +1376,27 @@ function probeHttpSoon(names, url, delay) {
   }, delay || 400));
 }
 
-async function editCustomTarget() {
-  const cur = testTarget();
-  const v = await Modal.ask({
-    title: "自定义测速地址",
-    note: "填一个能正常返回内容的 https 地址；测的是「经该节点访问它」的往返耗时。选好后点「测速」才开始。",
-    value: cur.tcp ? "" : cur.url,
-    placeholder: "https://www.google.com/",
-    okText: "用它",
-  });
-  if (!v) return;
-  let u = (v.value || "").trim();
-  if (!u) return;
-  if (!/^https?:\/\//i.test(u)) u = "https://" + u;
-  setTestTarget({ label: shortUrl(u), url: u });
-  syncTestButtons();
-  toast(`目标已设为 ${shortUrl(u)}，点「测速」开始`);
-}
-
 function testMenuItems() {
   const cur = testTarget();
-  const same = (t) => (t.tcp ? !!cur.tcp : (!cur.tcp && cur.url === t.url));
-  const items = TEST_TARGETS.map((t) => ({
-    label: `${same(t) ? "✓ " : "　"}${t.label}`,
-    onClick: () => { setTestTarget(t); syncTestButtons(); },
-  }));
-  items.push({ sep: true });
-  const custom = !cur.tcp && !TEST_TARGETS.some((t) => t.url === cur.url);
-  items.push({
-    label: custom ? `✓ 自定义：${shortUrl(cur.url)}` : "自定义地址…",
-    onClick: () => safe(editCustomTarget, "测速目标"),
+  const isCur = (t) => (t.tcp ? !!cur.tcp : (!cur.tcp && cur.url === t.url));
+  const items = [];
+  // TCP 握手：默认选项（只测端口可达）
+  items.push({ node: targetRow(TEST_TARGETS[3], cur.tcp, () => { setTestTarget({ tcp: true }); syncTestButtons(); }) });
+  // 预置站点
+  TEST_TARGETS.slice(0, 3).forEach((t) => {
+    items.push({ node: targetRow(t, isCur(t), () => { setTestTarget(t); syncTestButtons(); }) });
   });
+  // 自定义地址：用户在下面“添加”，这里列出并可逐个删除
+  const customs = customTargets();
+  if (customs.length) {
+    items.push({ sep: true });
+    customs.forEach((t) => {
+      const sel = !cur.tcp && sameUrl(cur.url, t.url);
+      items.push({ node: customTargetRow(t, sel, () => { setTestTarget(t); syncTestButtons(); }) });
+    });
+  }
+  items.push({ sep: true });
+  items.push({ label: "＋ 添加自定义地址…", onClick: () => safe(addCustomTargetFlow, "添加探测地址") });
   items.push({ sep: true });
   items.push({
     label: `${testSortOn() ? "✓ " : "　"}测速后按延迟排序`,
@@ -2016,32 +2158,79 @@ $("#btnApply").addEventListener("click", () => safe(async () => {
 }, "应用"));
 
 /* ---------------- 备份 ---------------- */
+/* 五个下发目标：key=后端标识，prefix=备份文件名前缀（list_backups 用目标路径的 basename 做 kind，保留点/下划线），label=展示名 */
+const BACKUP_TARGETS = [
+  { key: "rc_docker", prefix: "rc.docker", label: "rc.docker（dockerd 代理）" },
+  { key: "daemon_json", prefix: "daemon.json", label: "daemon.json（镜像加速）" },
+  { key: "ca_proxy", prefix: "proxy.cfg", label: "CA proxy.cfg（CA 商店代理）" },
+  { key: "go_file", prefix: "go", label: "/boot/config/go（开机重放）" },
+  { key: "profile_env", prefix: "uproxy.sh", label: "系统环境变量（profile.d）" },
+];
+
 async function loadBackups() {
-  const d = await api("/api/backups");
-  const out = $("#bakOut");
-  clear(out);
-  if (!(d.backups || []).length) { out.appendChild(el("div", "hint", "暂无备份")); return; }
-  const table = el("table", "data");
-  const tr = el("tr");
-  ["文件", "大小", "时间"].forEach((h) => tr.appendChild(el("th", "", h)));
-  table.appendChild(tr);
-  d.backups.forEach((b) => {
-    const row = el("tr");
-    row.appendChild(el("td", "mono", b.file));
-    row.appendChild(el("td", "mono", `${b.size}B`));
-    row.appendChild(el("td", "mono", b.mtime));
-    table.appendChild(row);
+  let d;
+  try { d = await api("/api/backups"); }
+  catch (e) { toast(`读取备份失败：${e.message}`); return; }
+  const baks = d.backups || [];
+
+  // 按“备份文件名前缀”把备份归到对应目标：文件名形如 <前缀>.<时间戳>.bak，
+  // 直接拿文件名做前缀匹配（不依赖后端返回的 kind，更稳）。
+  const byPrefix = {};
+  baks.forEach((b) => {
+    const t = BACKUP_TARGETS.find((x) => b.file.indexOf(x.prefix + ".") === 0);
+    if (!t) return;
+    (byPrefix[t.prefix] = byPrefix[t.prefix] || []).push(b);
   });
-  out.appendChild(table);
+  Object.values(byPrefix).forEach((arr) => arr.sort((a, b) => (a.mtime < b.mtime ? -1 : 1)));
+
+  const box = $("#bakTargets");
+  if (box) {
+    clear(box);
+    BACKUP_TARGETS.forEach((t) => {
+      const arr = byPrefix[t.prefix] || [];
+      const oldest = arr[0];         // 升序后第一条 = 最早
+      const row = el("div", "bakrow");
+      const left = el("div", "bakleft");
+      left.appendChild(el("div", "bakname", t.label));
+      left.appendChild(el("div", "bakmeta", arr.length
+        ? `共 ${arr.length} 份备份，最早 ${arr[0].mtime}`
+        : "暂无备份（uproxy 新建的目标，恢复即撤掉改动）"));
+      row.appendChild(left);
+      const btn = el("button", "mini", "恢复默认配置");
+      btn.title = oldest
+        ? `还原到 ${oldest.mtime} 的备份（uproxy 改动前）`
+        : "没有历史备份，将直接撤掉 uproxy 写入的内容";
+      btn.addEventListener("click", () => safe(async () => {
+        if (!confirm(`确定把「${t.label}」恢复到默认配置？`)) return;
+        const r = await api("/api/targets/reset", "POST", { key: t.key });
+        toast(r.note || r.message || "已恢复默认配置");
+        await loadBackups();
+        await loadState();
+      }, "恢复默认配置"));
+      row.appendChild(btn);
+      box.appendChild(row);
+    });
+  }
+
+  const out = $("#bakOut");
+  if (out) {
+    clear(out);
+    if (!baks.length) { out.appendChild(el("div", "hint", "暂无备份")); return; }
+    const table = el("table", "data");
+    const tr = el("tr");
+    ["文件", "大小", "时间"].forEach((h) => tr.appendChild(el("th", "", h)));
+    table.appendChild(tr);
+    baks.forEach((b) => {
+      const row = el("tr");
+      row.appendChild(el("td", "mono", b.file));
+      row.appendChild(el("td", "mono", `${b.size}B`));
+      row.appendChild(el("td", "mono", b.mtime));
+      table.appendChild(row);
+    });
+    out.appendChild(table);
+  }
 }
 $("#btnRefreshBak").addEventListener("click", () => safe(loadBackups, "刷新备份"));
-$("#btnRestore").addEventListener("click", () => safe(async () => {
-  if (!confirm("确认还原？会用最近一次备份覆盖当前文件。")) return;
-  const d = await api("/api/restore", "POST", { key: $("#selBackupKey").value });
-  toast(d.message);
-  await loadBackups();
-  await loadState();
-}, "还原"));
 $("#btnUninstall").addEventListener("click", () => safe(async () => {
   if (!confirm("确认移除 /boot/config/go 里的托管块？")) return;
   const d = await api("/api/uninstall", "POST", {});
@@ -2159,8 +2348,11 @@ async function boot() {
   autoTcpProbe();
   loadBackups().catch(() => {});
   Traffic.start();
+  startHealthLoop();        // 打开即自动体检，间隔取记住的设置（默认 30s）
   if (typeof LogPage !== "undefined") LogPage.boot();
   if (typeof Account !== "undefined") Account.boot();
+  migrateCustomTargets();     // 把旧版单个自定义目标补登记进列表
+  BOOTED = true;
 }
 
 /* ---------------- 首页仪表板 ----------------

@@ -12,6 +12,7 @@ import os
 import re
 
 from . import host
+from . import persist
 from . import settings as S
 from . import state as st
 
@@ -337,3 +338,67 @@ def restart_docker() -> dict:
         "/etc/rc.d/rc.docker restart"
     )
     return host.sh(cmd, timeout=180)
+
+
+# --------------------------------------------------------------------------
+# 恢复默认配置：把某个下发目标还原到 uproxy 改动前的状态
+# --------------------------------------------------------------------------
+def reset_target(key: str, cfg) -> dict:
+    """把某个下发目标恢复到 uproxy 改动前的默认状态。
+
+    优先用**最早**的那份备份（也就是 uproxy 第一次写入前、原系统的文件）；
+    没有备份说明这文件是 uproxy 新建的，或者只改过一次没留底，这种情况直接
+    撤掉 uproxy 自己加的改动即可。
+    """
+    if key not in S.CANDIDATES:
+        raise ValueError(f"未知目标: {key}")
+    path = S.resolve(key)
+    base = host._safe(os.path.basename(path))         # rc.docker / daemon.json / proxy.cfg / go / uproxy.sh
+    cands = [b for b in host.list_backups() if b["file"].startswith(base + ".")]
+    if cands:
+        cands.sort(key=lambda b: b["mtime"])          # 升序：最旧 = 改动前
+        host.restore(cands[0]["path"], path)
+        return {"status": "restored", "path": path, "backup": cands[0]["file"],
+                "note": "已还原到 uproxy 改动前的最初备份"}
+
+    # 没有备份：撤掉 uproxy 自己写入的内容（按目标类型处理）
+    if key == "go_file":
+        return persist.remove_block(cfg)
+    if key == "daemon_json":
+        cur = host.read(path)
+        if not cur.strip():
+            return {"status": "unchanged", "path": path, "note": "文件为空，无需处理"}
+        try:
+            data = json.loads(cur)
+        except json.JSONDecodeError:
+            return {"status": "skipped", "path": path,
+                    "note": "daemon.json 不是合法 JSON，请手动删除 registry-mirrors"}
+        if not isinstance(data, dict) or "registry-mirrors" not in data:
+            return {"status": "unchanged", "path": path, "note": "本来就没有 registry-mirrors"}
+        data.pop("registry-mirrors", None)
+        host.write_file(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+        return {"status": "written", "path": path, "note": "已移除 registry-mirrors"}
+    if key in ("ca_proxy", "profile_env"):
+        if os.path.exists(path):
+            host.write_file(path, "")                 # 清空：uproxy 不写即默认
+            return {"status": "written", "path": path, "note": "已清空 uproxy 写入的内容"}
+        return {"status": "unchanged", "path": path, "note": "文件不存在，无需处理"}
+    if key == "rc_docker":
+        return _strip_rc_docker(path)
+    return {"status": "skipped", "path": path, "note": "暂不支持该目标的恢复"}
+
+
+def _strip_rc_docker(path: str) -> dict:
+    """撤掉 rc.docker 启动行里 uproxy 注入的代理环境变量（build_block 的反操作）。"""
+    cur = host.read(path)
+    if not cur.strip():
+        return {"status": "unchanged", "path": path, "note": "rc.docker 为空"}
+    new = cur
+    new = re.sub(r"nohup env\s+", "nohup ", new)
+    new = re.sub(r"http_proxy=[^\s]*\s*", "", new)
+    new = re.sub(r"https_proxy=[^\s]*\s*", "", new)
+    new = re.sub(r"no_proxy=[^\s]*\s*", "", new)
+    if new == cur:
+        return {"status": "unchanged", "path": path, "note": "未发现 uproxy 注入的代理环境变量"}
+    host.write_file(path, new)
+    return {"status": "written", "path": path, "note": "已移除 uproxy 注入的代理环境变量"}

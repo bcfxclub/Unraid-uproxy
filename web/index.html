@@ -230,8 +230,19 @@
         <div class="row">
           <button id="btnHealth" class="primary">开始体检</button>
           <label class="chk"><input type="checkbox" id="healthViaProxy"> 同时测「走代理」</label>
+          <span class="grow"></span>
+          <label class="lbl" style="margin:0">自动</label>
+          <select id="healthInt" title="自动体检间隔，设置会被记住">
+            <option value="0">关闭</option>
+            <option value="5000">5s</option>
+            <option value="10000">10s</option>
+            <option value="15000">15s</option>
+            <option value="30000" selected>30s</option>
+            <option value="60000">60s</option>
+          </select>
         </div>
         <div id="healthOut" class="out"></div>
+        <div class="dlfoot" id="healthFoot" style="display:none"></div>
       </div>
 
     </div>
@@ -442,19 +453,11 @@
   <!-- ============ 备份 ============ -->
   <section id="tab-backup">
     <div class="card">
-      <h2>备份 <span class="tag">保留最近 40 份</span></h2>
-      <p class="hint">每次写入前都会自动备份原文件。</p>
-      <div class="row">
-        <select id="selBackupKey">
-          <option value="rc_docker">rc.docker</option>
-          <option value="daemon_json">daemon.json</option>
-          <option value="ca_proxy">CA proxy.cfg</option>
-          <option value="go_file">/boot/config/go</option>
-          <option value="profile_env">系统环境变量</option>
-        </select>
-        <button id="btnRestore">还原该目标最近一次备份</button>
-        <button id="btnRefreshBak">刷新列表</button>
-      </div>
+      <h2>备份与还原 <span class="tag">保留最近 40 份</span></h2>
+      <p class="hint">每次写入前都会自动备份原文件。下面每个目标都能一键「恢复默认配置」——还原到 uproxy 改动前的最初备份；没有备份的目标（uproxy 新建的）则直接撤掉 uproxy 的改动。</p>
+      <div id="bakTargets" class="baktargets"></div>
+      <div class="row"><button id="btnRefreshBak" class="mini">刷新</button></div>
+      <h3 style="margin-top:16px">备份历史</h3>
       <div id="bakOut" class="out"></div>
     </div>
     <div class="card">

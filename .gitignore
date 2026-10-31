@@ -17,3 +17,6 @@ Thumbs.db
 state/
 config/
 *.bak
+
+# 本地服务运行日志
+uvicorn.log
