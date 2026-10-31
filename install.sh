@@ -70,23 +70,46 @@ UPX_TOKEN="$UPX_PASSWORD"
 
 echo "==> 启动容器"
 docker rm -f uproxy >/dev/null 2>&1 || true
-docker run -d \
-  --name uproxy \
-  --restart unless-stopped \
-  -p "${PORT}:8765" \
-  -e "UPX_HOST_ROOT=/host" \
-  -e "UPX_STATE_DIR=/config" \
-  -e "TZ=Asia/Shanghai" \
-  -e "UPX_USER=admin" \
-  -e "UPX_PASSWORD=${UPX_PASSWORD}" \
-  -e "UPX_TOKEN=${UPX_TOKEN}" \
-  -v /boot:/host/boot \
-  -v /etc/docker:/host/etc/docker \
-  -v /usr/local/etc/rc.d:/host/usr/local/etc/rc.d \
-  -v /etc/profile.d:/host/etc/profile.d \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v "${STATE}:/config" \
-  uproxy:latest
+
+# Unraid 环境优先用官方模板引擎（run-template）创建容器：
+# 这样 Docker 页面会自动带上可点击的「WebUI」按钮（http://[IP]:[PORT:8765]/，
+# 其中 [IP]/[PORT] 由 Unraid 自动替换），无需手动输入地址。
+RUN_TPL=/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/run-template
+OK=0
+if [ -x "$RUN_TPL" ] && [ -f "$TPL/my-uproxy.xml" ]; then
+  if [ -n "$UPX_TOKEN" ]; then
+    # 把本次密码注入临时模板（不污染干净模板）；run-template 会把它作为 UPX_TOKEN 下发
+    TMPTPL="$(mktemp /tmp/uproxy-tpl.XXXXXX.xml)"
+    sed "s|\(Name=\"访问口令\" Target=\"UPX_TOKEN\"[^>]*>\)</Config>|\1$UPX_TOKEN</Config>|" \
+        "$TPL/my-uproxy.xml" > "$TMPTPL"
+    "$RUN_TPL" "$TMPTPL" && OK=1
+    rm -f "$TMPTPL"
+  else
+    # 密码留空：由已在界面设置的 auth.json 决定，干净模板即可
+    "$RUN_TPL" "$TPL/my-uproxy.xml" && OK=1
+  fi
+fi
+if [ "$OK" != "1" ]; then
+  echo "    未检测到 Unraid 模板引擎或模板创建失败，退回直接 docker run"
+  docker rm -f uproxy >/dev/null 2>&1 || true
+  docker run -d \
+    --name uproxy \
+    --restart unless-stopped \
+    -p "${PORT}:8765" \
+    -e "UPX_HOST_ROOT=/host" \
+    -e "UPX_STATE_DIR=/config" \
+    -e "TZ=Asia/Shanghai" \
+    -e "UPX_USER=admin" \
+    -e "UPX_PASSWORD=${UPX_PASSWORD}" \
+    -e "UPX_TOKEN=${UPX_TOKEN}" \
+    -v /boot:/host/boot \
+    -v /etc/docker:/host/etc/docker \
+    -v /usr/local/etc/rc.d:/host/usr/local/etc/rc.d \
+    -v /etc/profile.d:/host/etc/profile.d \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v "${STATE}:/config" \
+    uproxy:latest
+fi
 
 echo
 echo "==> 完成"
@@ -96,6 +119,10 @@ echo "      http://${IP}:${PORT}/"
 echo "    用户名： admin"
 echo "    密码：   ${UPX_PASSWORD}"
 echo "    （登录一次后浏览器会自动记住，无需再次输入）"
+echo
+echo "    在 Unraid 的 Docker 页面，uproxy 卡片上会出现「WebUI」按钮，直接点击即可访问"
+echo "    （按钮地址为 http://[IP]:[PORT:8765]/，由 Unraid 自动替换为本机 IP 与端口）。"
+echo "    若按钮未出现，请在 Docker 页面刷新，或重启一次 Docker 服务让 Unraid 加载模板。"
 echo
 echo "下一步：先在 WebUI「下发」页点「生成变更预览」核对 diff，确认无误再点「应用变更」。"
 echo "rc.docker 的行格式随 Unraid 版本变化，首次使用请务必人工核对一次。"

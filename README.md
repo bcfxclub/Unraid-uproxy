@@ -60,7 +60,37 @@ UPX_PASSWORD="换成你自己的长随机串" ./install.sh
 
 ## 部署详解：手工部署与更新维护
 
-「快速开始」给了三种首次部署方式（一键脚本 / docker compose / 容器模板）。下面补充**手工部署的完整手动步骤**、**后续如何更新**，以及**验证与排错**，方便你在没有脚本或想完全掌控时操作。
+「快速开始」给了三种首次部署方式（一键脚本 / docker compose / 容器模板）。下面补充**在 Unraid Web 界面手工填表创建容器**、**手工部署的完整手动步骤（命令行）**、**后续如何更新**，以及**验证与排错**，方便你在没有脚本或想完全掌控时操作。
+
+### 〇、在 Unraid Web 界面手工创建容器（逐项对照）
+
+如果你不想用脚本，可以在 Unraid「Docker → 添加容器 → 从零开始」手动填表。**前提**：镜像必须先在 Unraid 上构建好（`docker build -t uproxy:latest .`，或先跑一次 `install.sh` 的构建步骤），否则「存储库」填 `uproxy:latest` 会提示找不到镜像。「存储库(Repository)」就是 Docker 镜像名，本地构建的填 `uproxy:latest` 即可。
+
+逐项对照下表填写：
+
+| 表单字段 | 填什么 |
+| --- | --- |
+| 名称 | `uproxy` |
+| 存储库 | `uproxy:latest` |
+| 网络 | `bridge` |
+| **WebUI** | **`http://[IP]:[PORT:8765]/`** |
+| 额外参数 | `--restart=unless-stopped` |
+| 端口 | 主机 `8765` : 容器 `8765`（TCP） |
+| 路径 /host/boot | 宿主 `/boot`（读写） |
+| 路径 /host/etc/docker | 宿主 `/etc/docker`（读写） |
+| 路径 /host/usr/local/etc/rc.d | 宿主 `/usr/local/etc/rc.d`（读写） |
+| 路径 /host/etc/profile.d | 宿主 `/etc/profile.d`（读写） |
+| 路径 /config | 宿主 `/mnt/user/appdata/uproxy/state`（读写，**务必挂此卷持久化**） |
+| 设备 /var/run/docker.sock | 宿主 `/var/run/docker.sock`（**选「设备」类型，不是「路径」**） |
+| 变量 UPX_HOST_ROOT | `/host` |
+| 变量 UPX_STATE_DIR | `/config` |
+| 变量 TZ | `Asia/Shanghai` |
+| 变量 UPX_USER | `admin` |
+| 变量 UPX_PASSWORD | 你的登录密码（强烈建议设，留空=不校验） |
+| 变量 UPX_TOKEN | 同上 |
+
+> 关键点：**WebUI 字段一定要填 `http://[IP]:[PORT:8765]/`**（`[IP]`/`[PORT:8765]` 是 Unraid 占位符，自动替换为本机 IP 与端口）。填了之后，Docker 页面 uproxy 卡片上才会出现可点击的「WebUI」按钮，无需手动输入地址。
+> `/config` 必须挂到阵列/缓存上的 `state` 目录，否则重启后配置与密码全丢；Docker 套接字务必选「设备」类型挂载。
 
 ### 一、手工部署（完全手动，不依赖 install.sh）
 

@@ -4,6 +4,7 @@
   <Repository>uproxy:latest</Repository>
   <Registry/>
   <Network>bridge</Network>
+  <Restart>unless-stopped</Restart>
   <MyIP/>
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
@@ -30,4 +31,6 @@
   <Config Name="访问口令" Target="UPX_TOKEN" Default="" Mode="" Description="强烈建议设置：同网段任何人都能改你的 Docker 配置。留空表示不校验" Type="Variable" Display="always" Required="false" Mask="false"></Config>
   <Config Name="宿主机根挂载点" Target="UPX_HOST_ROOT" Default="/host" Mode="" Description="容器内宿主机根目录前缀，一般不用改" Type="Variable" Display="advanced" Required="true" Mask="false">/host</Config>
   <Config Name="时区" Target="TZ" Default="Asia/Shanghai" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">Asia/Shanghai</Config>
+  <Config Name="状态目录" Target="UPX_STATE_DIR" Default="/config" Mode="" Description="容器内配置与备份目录，对应挂载的 /config 卷" Type="Variable" Display="advanced" Required="true" Mask="false">/config</Config>
+  <Config Name="登录用户名" Target="UPX_USER" Default="admin" Mode="" Description="WebUI 登录用户名" Type="Variable" Display="advanced" Required="false" Mask="false">admin</Config>
 </Container>
