@@ -1030,7 +1030,8 @@ function syncSelCount() {
   const n = nodeSel.size;
   const c = $("#nodeSelCount");
   if (c) c.textContent = nodeCache.length ? `已选 ${n} 项 / 共 ${nodeCache.length} 个` : "";
-  ["#btnNodeDelSel", "#btnNodeShareSel", "#btnNodeEnableSel", "#btnNodeDisableSel"].forEach((s) => {
+  ["#btnNodeDelSel", "#btnNodeShareSel", "#btnNodeEnableSel", "#btnNodeDisableSel",
+   "#btnNodeAddGroup", "#btnNodeRmvGroup"].forEach((s) => {
     const b = $(s);
     if (b) b.disabled = n === 0;
   });
@@ -1063,12 +1064,59 @@ function toggleNodeState(n) {
 }
 
 // 点卡片 = 把出口切到这个节点；原本停用的会被一起启用（一次请求搞定）
+/* ---------------- 节点 ↔ 分组归属（显式，不再点卡片设默认时顺手加） ---------------- */
+function allGroups() {
+  return (STATE?.config?.outlet?.sb_groups) || [];
+}
+
+/* 节点当前在哪些分组里（用于卡片标记 / 禁用「移除」项） */
+function groupsOfNode(name) {
+  return allGroups().filter((g) => (g.nodes || []).includes(name)).map((g) => g.name);
+}
+
+/* 弹一个「选分组」菜单：把 names（单/多个节点）加进或移出某个分组。
+   mode: "add" 添加，"remove" 移除。anchor 是触发按钮，菜单贴着它展开。 */
+function openGroupPick(anchor, names, mode) {
+  const groups = allGroups();
+  if (!groups.length) {
+    Pop.open(anchor, [{ label: "（还没有分组，去「出口」页新建）", disabled: true }]);
+    return;
+  }
+  const items = groups.map((g) => {
+    const inG = (g.nodes || []).includes(names[0]);
+    return {
+      label: (mode === "add" ? "加入「" : "从「") + g.name + "」" + (mode === "add" ? "" : " 移除"),
+      // 移除模式下，单节点且本就不在该组 → 灰掉，免得瞎点
+      disabled: mode === "remove" && names.length === 1 && !inG,
+      onClick: () => safe(() => groupAction(names, g.name, mode), "分组操作"),
+    };
+  });
+  Pop.open(anchor, items);
+}
+
+/* 真正调用后端：批量时 names 是数组，后端一次性处理 */
+async function groupAction(names, group, mode) {
+  if (!names || !names.length) { toast("请先勾选节点"); return; }
+  const body = mode === "add"
+    ? { add_node: { group, nodes: names } }
+    : { remove_node: { group, nodes: names } };
+  const d = await api("/api/groups", "POST", body);
+  if (d && d.ok === false) { toast(d.message || "操作失败"); return; }
+  toast(d.message || "完成");
+  await loadState();
+}
+
 async function setActiveNode(n) {
   const cur = nodeDisSet();
   const wasOff = cur.has(n.name);
   cur.delete(n.name);
-  const r = await api("/api/nodes", "POST", { node: n.name, disabled: Array.from(cur) });
-  if (r && r.ok === false) { toast(r.message || "切换失败"); return; }
+  // no_add=true：点卡片只是「设为默认出口」，不再顺手把节点塞进当前分组。
+  // 节点必须先在某个分组里才设得成默认（sing-box 要求），不在组就明确提示先加分组。
+  const r = await api("/api/nodes", "POST", { node: n.name, disabled: Array.from(cur), no_add: true });
+  if (r && r.ok === false) {
+    toast(r.message || "切换失败");
+    return;
+  }
   toast(wasOff ? `已启用并切到「${n.name}」` : `出口已切到「${n.name}」`);
   await loadState();
 }
@@ -1536,9 +1584,10 @@ function testMenuItems() {
   return items;
 }
 
-function nodeMenuItems(n) {
+function nodeMenuItems(n, anchor) {
   const isOff = nodeDisSet().has(n.name);
   const isDef = STATE?.config?.outlet?.sb_node === n.name;
+  const inGroups = groupsOfNode(n.name);
   return [
     { label: `HTTP 实测（→ ${testTarget().label}）`, onClick: () => safe(() => runNodeTest([n.name], "http"), "测速") },
     { label: "TCP 握手测速", onClick: () => safe(() => runNodeTest([n.name], "tcp"), "测速") },
@@ -1548,10 +1597,20 @@ function nodeMenuItems(n) {
     {
       label: isDef ? "取消默认出口" : "设为默认出口",
       onClick: () => safe(async () => {
-        await api("/api/nodes", "POST", { node: isDef ? "" : n.name });
+        await api("/api/nodes", "POST", { node: isDef ? "" : n.name, no_add: true });
         toast(isDef ? "已取消默认出口" : "已设为默认出口");
         await loadState();
       }, "设默认"),
+    },
+    { sep: true },
+    {
+      label: "添加到代理组 ▾",
+      onClick: () => openGroupPick(anchor, [n.name], "add"),
+    },
+    {
+      label: "从代理组移除 ▾",
+      disabled: inGroups.length === 0,
+      onClick: () => openGroupPick(anchor, [n.name], "remove"),
     },
     { sep: true },
     { label: "删除", danger: true, onClick: () => safe(() => delNodes([n.name]), "删除节点") },
@@ -1592,7 +1651,7 @@ function renderNodeGrid() {
     head.appendChild(chk);
     head.appendChild(el("div", "nc-name", n.name));
     if (defaultNode === n.name) head.appendChild(el("span", "nc-def", "默认"));
-    head.appendChild(dotsBtn((btn) => Pop.toggle(btn, nodeMenuItems(n))));
+    head.appendChild(dotsBtn((btn) => Pop.toggle(btn, nodeMenuItems(n, btn))));
     head.appendChild(icoDel("删除此节点", () => safe(() => delNodes([n.name]), "删除节点")));
     card.appendChild(head);
 
@@ -1615,9 +1674,20 @@ function renderNodeGrid() {
     delayEl.title = delayTitle(d);
     card.appendChild(delayEl);
 
+    // 所属分组：直接显示节点在哪些组，移除时心里有数
+    const gs = groupsOfNode(n.name);
+    const gline = el("div", "nc-groups");
+    if (gs.length) {
+      gline.appendChild(el("span", "nc-glabel", "分组"));
+      gs.forEach((g) => gline.appendChild(el("span", "nc-gtag", g)));
+    } else {
+      gline.appendChild(el("span", "nc-gnone", "未在任何分组"));
+    }
+    card.appendChild(gline);
+
     // 点卡片 = 把出口切到它（顺带启用）；批量勾选交给左边的小方框
     card.addEventListener("click", (e) => {
-      if (e.target.closest("input, button, .dots, .nc-state")) return;
+      if (e.target.closest("input, button, .dots, .nc-state, .nc-groups")) return;
       safe(() => setActiveNode(n), "切换出口");
     });
     box.appendChild(card);
@@ -1656,7 +1726,7 @@ function renderNodeTable(nodes, sbNode) {
     const nameTd = el("td");
     const nameBox = el("div", "row");
     nameBox.appendChild(el("span", "mono", n.name));
-    nameBox.appendChild(dotsBtn((btn) => Pop.toggle(btn, nodeMenuItems(n))));
+    nameBox.appendChild(dotsBtn((btn) => Pop.toggle(btn, nodeMenuItems(n, btn))));
     nameBox.appendChild(icoDel("删除此节点", () => safe(() => delNodes([n.name]), "删除节点")));
     nameTd.appendChild(nameBox);
     row.appendChild(nameTd);
@@ -1756,6 +1826,16 @@ $("#btnSubUpdSel").addEventListener("click", () => safe(async () => {
 }, "批量更新订阅"));
 
 $("#btnNodeDelSel").addEventListener("click", () => safe(() => delNodes(Array.from(nodeSel)), "批量删除节点"));
+$("#btnNodeAddGroup").addEventListener("click", (e) => {
+  const names = Array.from(nodeSel);
+  if (!names.length) { toast("请先勾选节点"); return; }
+  openGroupPick(e.currentTarget, names, "add");
+});
+$("#btnNodeRmvGroup").addEventListener("click", (e) => {
+  const names = Array.from(nodeSel);
+  if (!names.length) { toast("请先勾选节点"); return; }
+  openGroupPick(e.currentTarget, names, "remove");
+});
 $("#btnNodeShareSel").addEventListener("click", () => safe(() => shareNodes(Array.from(nodeSel)), "分享节点"));
 $("#btnNodeEnableSel").addEventListener("click", () => safe(() => setDisabled(Array.from(nodeSel), false), "启用节点"));
 $("#btnNodeDisableSel").addEventListener("click", () => safe(() => setDisabled(Array.from(nodeSel), true), "停用节点"));

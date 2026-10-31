@@ -128,6 +128,7 @@ class NodeReq(BaseModel):
     delete: list[str] = Field(default_factory=list)    # 批量删除节点（进黑名单）
     restore: list[str] = Field(default_factory=list)   # 从黑名单恢复
     order: list[str] | None = None                     # 节点显示顺序（测速排序结果）
+    no_add: bool = False                               # 设为默认出口时不要把节点顺手加进分组
 
 
 class NodeTestReq(BaseModel):
@@ -854,6 +855,8 @@ class GroupReq(BaseModel):
     delete: str = ""
     update: dict = Field(default_factory=dict)    # {name, nodes, node}
     config: dict = Field(default_factory=dict)    # {name, url, interval, strategy}
+    add_node: dict = Field(default_factory=dict)      # {group, node} 显式把节点加进分组
+    remove_node: dict = Field(default_factory=dict)   # {group, node} 从分组移除节点
 
 
 @app.get("/api/groups", dependencies=[Depends(guard)])
@@ -880,6 +883,14 @@ def api_groups_post(req: GroupReq):
                                     req.config.get("strategy"))
         elif req.active:
             msg = groupsm.set_active(cfg, req.active)
+        elif req.add_node:
+            a = req.add_node
+            node = a.get("nodes") or [a.get("node")]
+            msg = groupsm.add_node(cfg, node, a.get("group"))
+        elif req.remove_node:
+            r = req.remove_node
+            node = r.get("nodes") or [r.get("node")]
+            msg = groupsm.remove_node(cfg, node, r.get("group"))
         else:
             return {"ok": False, "message": "没有指定要做什么（active / create / rename / delete / update）"}
     except ValueError as e:
@@ -952,7 +963,7 @@ def api_nodes(req: NodeReq):
     if req.node is not None:
         # 选中节点现在挂在分组上："" = 分组内自动（延迟最低）
         try:
-            groupsm.set_node(cfg, req.node, req.group)
+            groupsm.set_node(cfg, req.node, req.group, add_if_missing=not req.no_add)
         except ValueError as e:
             return {"ok": False, "message": str(e)}
     _apply_order(cfg)

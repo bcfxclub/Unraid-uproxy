@@ -389,6 +389,12 @@ table.data th { color: var(--muted); font-weight: 400; }
 .nc-delay.ok { color: var(--ok); background: var(--ok-soft); }
 .nc-delay.warn { color: var(--warn); background: var(--warn-soft); }
 .nc-delay.bad { color: var(--bad); background: var(--bad-soft); }
+/* 卡片上的分组归属：让用户看见节点在哪些组，移除时心里有数 */
+.nc-groups { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 2px; }
+.nc-glabel { font-size: 11px; color: var(--muted); }
+.nc-gtag { font-size: 11px; padding: 1px 7px; border-radius: 999px; color: var(--accent);
+  background: var(--accent-soft); border: 1px solid rgba(230,182,79,0.35); white-space: nowrap; }
+.nc-gnone { font-size: 11px; color: var(--muted); font-style: italic; }
 .name-edit {
   width: 100%; background: transparent; border: none; border-bottom: 1px dashed transparent;
   color: var(--text); font-size: 13px; padding: 2px 0; font-family: var(--font);

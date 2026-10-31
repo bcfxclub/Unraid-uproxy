@@ -269,11 +269,14 @@ def set_active(cfg, name: Any) -> str:
     return f"已切到分组「{n}」"
 
 
-def set_node(cfg, node: Any, group: str = "") -> str:
+def set_node(cfg, node: Any, group: str = "", add_if_missing: bool = True) -> str:
     """给分组指定出口节点；``node=""`` = 自动（延迟最低）。
 
-    从「订阅」页点节点卡片时也会走这里：节点若不在当前分组，顺手收进来，
-    否则用户会看到「选了但没生效」。
+    ``add_if_missing``：节点不在分组里时是否顺手收进来。
+    - 分组编辑器 / 启动 sing-box 选节点时保持 True（选谁就得让谁进组，否则不生效）。
+    - 「订阅」页点卡片「设为默认出口」时传 False：分组归属是独立动作，
+      不该因为点一下设默认就把节点塞进当前分组。节点不在组里就明确报错，
+      引导用户先用「添加到代理组」。
     """
     ensure(cfg)
     g = _find(cfg, _clean(group)) if group else active(cfg)
@@ -284,9 +287,55 @@ def set_node(cfg, node: Any, group: str = "") -> str:
         if want not in names(cfg):
             raise ValueError(f"节点「{want}」不可用（可能已停用或删除）")
         if want not in g["nodes"]:
+            if not add_if_missing:
+                raise ValueError(f"节点「{want}」不在分组「{g['name']}」，请先「添加到代理组」")
             g["nodes"].append(want)
         g["node"] = want
     else:
         g["node"] = ""
     cfg.outlet.sb_node = active(cfg)["node"]
     return f"「{g['name']}」已{'固定到 ' + want if want else '改回自动（延迟最低）'}"
+
+
+def add_node(cfg, node, group: str = "") -> str:
+    """把节点显式加进指定分组（不动当前选中节点），由界面「添加到代理组」触发。
+    ``node`` 可是单个名字或名字列表（批量操作）。"""
+    ensure(cfg)
+    g = _find(cfg, _clean(group)) if group else active(cfg)
+    if g is None:
+        raise ValueError(f"分组「{group}」不存在")
+    names_list = node if isinstance(node, (list, tuple, set)) else [node]
+    valid = names(cfg)
+    added = 0
+    for nm in names_list:
+        nm = str(nm or "")
+        if not nm or nm not in valid:
+            continue
+        if nm not in g["nodes"]:
+            g["nodes"].append(nm)
+            added += 1
+    if len(names_list) > 1:
+        return f"已将 {added} 个节点加入「{g['name']}」" if added else f"所选节点已在「{g['name']}」"
+    nm = str((names_list[0] if names_list else "") or "")
+    return (f"已将「{nm}」加入「{g['name']}」"
+            if added else f"「{nm}」已在「{g['name']}」")
+
+
+def remove_node(cfg, node, group: str = "") -> str:
+    """从指定分组移除节点（不动当前选中节点），由界面「从代理组移除」触发。
+    ``node`` 可是单个名字或名字列表（批量操作）。"""
+    ensure(cfg)
+    g = _find(cfg, _clean(group)) if group else active(cfg)
+    if g is None:
+        raise ValueError(f"分组「{group}」不存在")
+    names_list = node if isinstance(node, (list, tuple, set)) else [node]
+    before = len(g["nodes"])
+    g["nodes"] = [x for x in g["nodes"] if x not in set(str(v) for v in names_list)]
+    if g.get("node") and g.get("node") not in g["nodes"]:
+        g["node"] = ""   # 选中的被移走 → 改回自动（延迟最低）
+    removed = before - len(g["nodes"])
+    if len(names_list) > 1:
+        return f"已从「{g['name']}」移除 {removed} 个节点" if removed else f"所选节点本不在「{g['name']}」"
+    nm = str((names_list[0] if names_list else "") or "")
+    return (f"已从「{g['name']}」移除「{nm}」"
+            if removed else f"「{nm}」本不在「{g['name']}」")
