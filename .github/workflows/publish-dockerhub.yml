@@ -47,3 +47,45 @@ jobs:
           tags: |
             ${{ github.event_name == 'push' && format('{0}/{1}', secrets.DOCKERHUB_USERNAME, 'uproxy') }}:latest
             ${{ github.event_name == 'push' && format('{0}/{1}:{2}', secrets.DOCKERHUB_USERNAME, 'uproxy', steps.version.outputs.version) }}
+
+# ============================================================
+# 同时推送到 GHCR（ghcr.io/<owner 小写>/uproxy），免 Docker Hub 也能拉。
+# 该 job 不需要任何 Secret（用 GITHUB_TOKEN），包名固定为 uproxy（全小写）。
+# 首次推送前，去仓库 Settings -> Packages -> General，把 visibility 设为 Public，
+# 否则匿名 pull 会 403。
+# ============================================================
+  publish-ghcr:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version from tag
+        id: version
+        if: github.event_name == 'push'
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          # GHCR 包名必须全小写；仓库名 Unraid-uproxy 大写，GHCR 不接受，固定用 uproxy
+          tags: |
+            ghcr.io/${{ github.repository_owner | lower }}/uproxy:latest
+            ghcr.io/${{ github.repository_owner | lower }}/uproxy:${{ steps.version.outputs.version }}

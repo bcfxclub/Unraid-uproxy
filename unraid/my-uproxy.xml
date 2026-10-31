@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Container version="2">
   <Name>uproxy</Name>
-  <!-- 存储库：默认指向 Docker Hub 公开发布的镜像 bcfx/uproxy:latest（可自动拉取更新）。
-       若你在本机自行 docker build 了镜像，把它改成 uproxy:latest 即可。 -->
-  <Repository>bcfx/uproxy:latest</Repository>
-  <Registry>docker.io</Registry>
+  <!-- 存储库：完整镜像地址。默认指向 GitHub Container Registry（GHCR）公开发布：
+       ghcr.io/bcfxclub/uproxy:latest（随 GitHub tag 自动构建，Unraid 直接拉取，无需本地 build）。
+       想改拉 Docker Hub 时，把 Repository 换成 bcfx/uproxy:latest 即可（对应 .github/workflows/publish-dockerhub.yml 推的镜像）。
+       注意：GHCR 包名必须全小写，仓库名 Unraid-uproxy 大写不被 GHCR 接受，故镜像名固定为 uproxy。 -->
+  <Repository>ghcr.io/bcfxclub/uproxy:latest</Repository>
+  <Registry>https://ghcr.io</Registry>
   <Network>bridge</Network>
   <Restart>unless-stopped</Restart>
   <MyIP/>

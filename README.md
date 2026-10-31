@@ -22,12 +22,14 @@ Unraid 上这四个位置互相独立、写法各异、且全在内存里（重�
 
 四种方式任选其一。**已发布到 Docker Hub 后最省事的是方式〇**（直接拉取，无需本地 build）；离线 / 想跟最新代码用方式一。
 
-### 方式〇：从 Docker Hub 拉取（发布后推荐，最简）
+### 方式〇：从 GitHub Container Registry（GHCR）拉取（推荐，免 Docker Hub）
 
-镜像已发布到 Docker Hub（命名空间 `bcfxclub`）。Unraid 默认能从 Docker Hub 拉取：
+镜像随 GitHub tag 自动发布到 **GHCR**（`.github/workflows/publish-dockerhub.yml` 里同时推 Docker Hub + GHCR）。GHCR 不需要额外配 Token——只要该仓库的包可见性设为 Public，Unraid 就能匿名拉取。
+
+**一次性前提（维护者）**：仓库 `Settings → Packages → General`，把 Package Visibility 设为 **Public**（否则匿名 pull 会 403）。包名全小写 `bcfxclub/uproxy`。
 
 ```bash
-# 在 Unraid 终端（或在 Docker 页面填「存储库 bcfx/uproxy:latest」+ WebUI http://[IP]:[PORT:8765]/ 手工创建）
+# 在 Unraid 终端（或在 Docker 页面填「存储库 ghcr.io/bcfxclub/uproxy:latest」+ WebUI http://[IP]:[PORT:8765]/ 手工创建）
 mkdir -p /mnt/user/appdata/uproxy/state
 docker run -d --name uproxy --restart unless-stopped \
   -p 8765:8765 \
@@ -39,11 +41,19 @@ docker run -d --name uproxy --restart unless-stopped \
   -v /etc/profile.d:/host/etc/profile.d \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /mnt/user/appdata/uproxy/state:/config \
-  bcfx/uproxy:latest
+  ghcr.io/bcfxclub/uproxy:latest
 ```
 
-> 拉取后更新只需 `docker pull bcfx/uproxy:latest && docker run`（重建容器即可，配置全在 `state` 卷，不丢）。
-> 若 Unraid 拉 Docker Hub 慢/失败，本项目本身就干这个的：先用现有出口或公共镜像源把 dockerd 的 registry-mirrors 配好，再 `docker pull`。
+> 更新只需 `docker pull ghcr.io/bcfxclub/uproxy:latest` 重建容器（配置全在 `state` 卷，不丢）。
+> 国内拉 GHCR 若慢，本项目本身就干这个的：先用现有出口把 dockerd 配好再 pull。
+> 若你更想用 Docker Hub，把镜像名换成 `bcfx/uproxy:latest` 即可（两个都自动推，等价）。
+
+### 方式〇'：从 Docker Hub 拉取（与 GHCR 等价）
+
+```bash
+# 同上，把最后一行的 ghcr.io/bcfxclub/uproxy:latest 换成 bcfx/uproxy:latest
+docker pull bcfx/uproxy:latest
+```
 
 ### 方式一：一键脚本（离线 / 跟最新代码推荐）
 
