@@ -191,6 +191,20 @@ function dotsBtn(onClick) {
   return b;
 }
 
+/* 卡片上常显的「删除」按钮（垃圾桶图标），不用展开菜单就能点 */
+const TRASH_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+  + 'stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/>'
+  + '<path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
+
+function icoDel(title, onClick) {
+  const b = el("button", "ico-del");
+  b.type = "button";
+  b.title = title || "删除";
+  b.innerHTML = TRASH_SVG;
+  b.addEventListener("click", (e) => { e.stopPropagation(); e.preventDefault(); onClick(); });
+  return b;
+}
+
 /* ---------------- 通用弹窗（改名称 / 修改订阅 / 分享链接）---------------- */
 const Modal = (function () {
   function build(opts) {
@@ -614,7 +628,7 @@ function renderSubList(subs) {
   Array.from(subSel).forEach((k) => { if (!alive.has(k)) subSel.delete(k); });
 
   if (!subs.length) {
-    box.appendChild(el("div", "hint", "还没有订阅源。在下面粘贴地址添加，可添加多个并存。"));
+    box.appendChild(el("div", "hint", "还没有订阅源。点下方「＋ 新增订阅 / 粘贴导入」添加，可添加多个并存。"));
     syncSubSel();
     return;
   }
@@ -642,6 +656,7 @@ function renderSubList(subs) {
       { sep: true },
       { label: "删除", danger: true, onClick: () => safe(() => delSubs([key], subTitle(s)), "删除订阅") },
     ])));
+    head.appendChild(icoDel("删除此订阅", () => safe(() => delSubs([key], subTitle(s)), "删除订阅")));
     card.appendChild(head);
 
     const meta = el("div", "sc-meta");
@@ -829,6 +844,7 @@ function renderNodeGrid() {
     head.appendChild(chk);
     head.appendChild(el("div", "nc-name", n.name));
     head.appendChild(dotsBtn((btn) => Pop.toggle(btn, nodeMenuItems(n))));
+    head.appendChild(icoDel("删除此节点", () => safe(() => delNodes([n.name]), "删除节点")));
     card.appendChild(head);
 
     const meta = el("div", "nc-meta");
@@ -890,6 +906,7 @@ function renderNodeTable(nodes, sbNode) {
     const nameBox = el("div", "row");
     nameBox.appendChild(el("span", "mono", n.name));
     nameBox.appendChild(dotsBtn((btn) => Pop.toggle(btn, nodeMenuItems(n))));
+    nameBox.appendChild(icoDel("删除此节点", () => safe(() => delNodes([n.name]), "删除节点")));
     nameTd.appendChild(nameBox);
     row.appendChild(nameTd);
 
@@ -931,8 +948,10 @@ function renderNodes() {
   refreshSourceSel();
   syncSelCount();
   // 视图切换：grid 显示网格隐藏表，反之
+  // 注意：这里不能写死 display:block —— 会把 .nodegrid 的 display:grid 覆盖掉，
+  // 卡片就变成整行铺满，页面被拉得很长。传空串 = 交回给 CSS 决定。
   const gridOn = nodeState.view === "grid";
-  $("#nodeGrid").style.display = gridOn ? "block" : "none";
+  $("#nodeGrid").style.display = gridOn ? "" : "none";
   $("#nodeTableWrap").style.display = gridOn ? "none" : "block";
   $("#btnNodeGrid").classList.toggle("primary", gridOn);
   $("#btnNodeList").classList.toggle("primary", !gridOn);
@@ -1028,6 +1047,18 @@ function applyRouteUI(outlet) {
   const hint = $("#sbRouteHint");
   if (hint) hint.textContent = `当前分流模式：${mode === "auto" ? "智能分流（国内/局域网直连，仅目标域名走代理）" : mode === "all" ? "全部走代理（谨慎）" : "自定义"}。`;
 }
+
+/* 新增订阅表单默认收起，省纵向空间 */
+const subAddWrap = $("#subAddWrap");
+function setAddOpen(on) {
+  subAddWrap.classList.toggle("open", !!on);
+  const b = $("#btnSubToggleAdd");
+  if (b) b.textContent = on ? "收起新增表单" : "＋ 新增订阅 / 粘贴导入";
+}
+if ($("#btnSubToggleAdd")) {
+  $("#btnSubToggleAdd").addEventListener("click", () => setAddOpen(!subAddWrap.classList.contains("open")));
+}
+if ($("#btnSubClose")) $("#btnSubClose").addEventListener("click", () => setAddOpen(false));
 
 $("#btnSubAdd").addEventListener("click", () => safe(async () => {
   const url = $("#inSubUrl").value.trim();

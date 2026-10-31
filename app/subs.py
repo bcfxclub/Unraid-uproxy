@@ -477,16 +477,25 @@ def test_nodes(nodes: list[dict], timeout: float = 3.0) -> list[dict]:
     return res
 
 
-def sync_subscriptions(subscriptions: list[dict], ua: str = "clash.meta") -> dict:
+def sync_subscriptions(subscriptions: list[dict], ua: str = "clash.meta",
+                       previous: list[dict] | None = None) -> dict:
     """拉取并合并所有「启用」的订阅源。
 
     返回 {ok, nodes, summary, unsupported}。单个源失败不影响其他源，
     summary 里逐条标注每个源的结果，便于前端展示。
+
+    ``previous`` 传入上一次的节点集：某个源这次拉取失败时，会沿用该源上次的节点，
+    避免「网络抖一下就把节点全清空」。只有拉取成功才替换。
     """
     summary: list[dict] = []
     merged: list[dict] = []
     unsupported: set[str] = set()
     any_ok = False
+    prev = previous or []
+
+    def _keep_prev(source_name: str) -> list[dict]:
+        return [dict(n) for n in prev if (n.get("source") or "") == source_name]
+
     for sub in subscriptions:
         if not sub.get("enabled", True):
             summary.append({"name": sub.get("name", ""), "url": sub.get("url", ""),
@@ -512,13 +521,19 @@ def sync_subscriptions(subscriptions: list[dict], ua: str = "clash.meta") -> dic
                             "count": len(stored)})
             continue
         got = fetch(url, sub.get("ua") or ua, proxy=sub.get("proxy") or "", retries=3)
+        source_name = sub.get("name") or url
         if not got["ok"]:
+            kept = _keep_prev(source_name)
+            merged += kept
+            msg = got["message"]
+            if kept:
+                # 拉取失败但有历史节点：保留，避免节点凭空消失
+                msg = f"{msg}（沿用上次的 {len(kept)} 个节点）"
             summary.append({"name": sub.get("name", ""), "url": url, "ok": False,
-                            "message": got["message"], "count": 0,
+                            "message": msg, "count": len(kept), "stale": bool(kept),
                             "http_code": got.get("http_code", "")})
             continue
         parsed = parse(got["raw"])
-        source_name = sub.get("name") or url
         # 给本订阅所有节点打上来源标记，前端按订阅分组/过滤
         for n in parsed["nodes"]:
             n["source"] = source_name

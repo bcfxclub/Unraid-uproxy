@@ -405,8 +405,7 @@ def _node_view(n: dict) -> dict:
 def _resync(cfg: st.AppCfg) -> dict:
     """用当前所有「启用」的订阅源重新拉取并合并节点，写回 sb_nodes。"""
     import time as _t
-    res = subs.sync_subscriptions(cfg.outlet.subscriptions)
-    # 用户显式删除过的节点不再回来（黑名单）
+    res = subs.sync_subscriptions(cfg.outlet.subscriptions, previous=cfg.outlet.sb_nodes)
     removed = set(cfg.outlet.sb_removed or [])
     nodes = [n for n in res["nodes"] if n["name"] not in removed]
     if len(nodes) != len(res["nodes"]):

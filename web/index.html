@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>uproxy · Unraid 出网加速</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v=17">
 </head>
 <body>
 
@@ -164,20 +164,26 @@
         <button id="btnSubUpdateAll" class="mini">更新全部</button>
       </div>
       <div id="subList" class="subgrid"></div>
-      <div class="row wrap" style="margin-top:12px">
-        <input id="inSubName" placeholder="备注名（可选）" style="max-width:160px">
-        <input id="inSubUrl" placeholder="订阅地址 https://... 或 base64...">
-        <input id="inSubUa" placeholder="UA" style="max-width:110px">
-        <input id="inSubProxy" placeholder="通过代理拉取（可选）" style="max-width:200px">
+      <div class="foldbar">
+        <button id="btnSubToggleAdd" class="mini">＋ 新增订阅 / 粘贴导入</button>
       </div>
-      <div class="row wrap">
-        <label class="chk"><input type="checkbox" id="inSubEnabled" checked> 启用</label>
-        <button id="btnSubAdd" class="primary">添加并拉取</button>
-      </div>
-      <label class="lbl">或直接粘贴订阅内容 / Clash YAML（本地解析，不经网络）</label>
-      <div class="row">
-        <textarea id="inSubRaw" rows="3" placeholder="vmess://... 或 proxies:"></textarea>
-        <button id="btnSubRaw">解析粘贴内容</button>
+      <div id="subAddWrap" class="fold">
+        <div class="row wrap" style="margin-top:12px">
+          <input id="inSubName" placeholder="备注名（可选）" style="max-width:160px">
+          <input id="inSubUrl" placeholder="订阅地址 https://... 或 base64...">
+          <input id="inSubUa" placeholder="UA" style="max-width:110px">
+          <input id="inSubProxy" placeholder="通过代理拉取（可选）" style="max-width:200px">
+        </div>
+        <div class="row wrap">
+          <label class="chk"><input type="checkbox" id="inSubEnabled" checked> 启用</label>
+          <button id="btnSubAdd" class="primary">添加并拉取</button>
+          <button id="btnSubClose" class="mini">收起</button>
+        </div>
+        <label class="lbl">或直接粘贴订阅内容 / Clash YAML（本地解析，不经网络）</label>
+        <div class="row">
+          <textarea id="inSubRaw" rows="3" placeholder="vmess://... 或 proxies:"></textarea>
+          <button id="btnSubRaw">解析粘贴内容</button>
+        </div>
       </div>
       <div id="subOut" class="out"></div>
     </div>
@@ -406,6 +412,6 @@
 </div>
 
 <div id="toast" class="toast"></div>
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=17"></script>
 </body>
 </html>
