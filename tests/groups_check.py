@@ -173,6 +173,56 @@ def main() -> int:
     check([g["name"] for g in saved["sb_groups"]] == ["PROXY", "ONLY-C"], f"分组已落盘：{saved['sb_groups']}")
     check(saved["sb_group"] == "ONLY-C", "当前分组已落盘")
 
+    print("\n[8] 只剩一个分组时，移出的节点不能被自动塞回去")
+    cfg = st.load()
+    cfg.outlet.sb_nodes = [node(x) for x in ["a", "b", "c"]]
+    cfg.outlet.sb_disabled = []
+    cfg.outlet.sb_groups = [{"name": "ONLY", "nodes": ["a", "b", "c"], "node": ""}]
+    cfg.outlet.sb_group = "ONLY"
+    cfg.outlet.sb_group_seen = ["a", "b", "c"]
+    st.save(cfg)
+    d = post("/api/groups", {"update": {"name": "ONLY", "nodes": ["a"], "node": ""}})
+    only = [g for g in d["groups"] if g["name"] == "ONLY"][0]
+    check(only["nodes"] == ["a"], f"保存后只剩 1 个成员：{only['nodes']}")
+    d = get("/api/groups")     # 再 ensure 一次，数量不能涨回去
+    only = [g for g in d["groups"] if g["name"] == "ONLY"][0]
+    check(only["nodes"] == ["a"], f"再次读取仍是 1 个：{only['nodes']}")
+    check(only["count"] == 1, f"count 与成员数一致：{only['count']}")
+
+    # 订阅里新出现的节点还是要补进第一个组，否则新节点会「消失」
+    cfg = st.load()
+    cfg.outlet.sb_nodes = cfg.outlet.sb_nodes + [node("d")]
+    st.save(cfg)
+    d = get("/api/groups")
+    only = [g for g in d["groups"] if g["name"] == "ONLY"][0]
+    check("d" in only["nodes"], f"新节点自动进第一个组：{only['nodes']}")
+
+    print("\n[9] 分组测速配置（探测 URL / 间隔 / 类型）")
+    d = post("/api/groups", {"config": {"name": "ONLY", "url": "https://cp.cloudflare.com/generate_204",
+                                        "interval": "30s", "strategy": "urltest"}})
+    check(d["ok"], f"保存成功：{d.get('message')}")
+    only = [g for g in d["groups"] if g["name"] == "ONLY"][0]
+    check(only["url"] == "https://cp.cloudflare.com/generate_204", f"URL 已存：{only['url']}")
+    check(only["interval"] == 30, f"间隔已存（秒）：{only['interval']}")
+    cfg = st.load()
+    conf = outlets._sb_config(cfg, version=(1, 12))
+    out = outbound_of(conf)
+    check(out.get("type") == "urltest", f"自动分组生成 urltest：{out.get('type')}")
+    check(out.get("url") == "https://cp.cloudflare.com/generate_204", f"用自定义探测地址：{out.get('url')}")
+    check(out.get("interval") == "30s", f"用自定义间隔：{out.get('interval')}")
+    d = post("/api/groups", {"config": {"name": "ONLY", "strategy": "select"}})
+    cfg = st.load()
+    conf = outlets._sb_config(cfg, version=(1, 12))
+    out = outbound_of(conf)
+    check(out.get("type") == "selector", f"类型=手动选择生成 selector：{out.get('type')}")
+    check(out.get("default") == "a", f"没固定节点时默认第一台：{out.get('default')}")
+    d = post("/api/groups", {"config": {"name": "ONLY", "interval": "3"}})
+    check(d["ok"] is False and "10" in d["message"], f"间隔太小被拒：{d.get('message')}")
+    d = post("/api/groups", {"config": {"name": "ONLY", "url": "ftp://x"}})
+    check(d["ok"] is False and "http" in d["message"], f"非 http 地址被拒：{d.get('message')}")
+    # 复原成 urltest，免得影响后面的落盘检查
+    post("/api/groups", {"config": {"name": "ONLY", "strategy": "urltest", "interval": 60}})
+
     print("\n" + ("=" * 46))
     if FAILED:
         print(f"失败 {len(FAILED)} 项：")

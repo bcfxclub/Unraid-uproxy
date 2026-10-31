@@ -46,6 +46,9 @@ class OutletCfg(BaseModel):
     # 代理分组：{name, nodes:[节点名], node:选中的节点（空=自动挑延迟最低的）}
     sb_groups: list[dict[str, Any]] = Field(default_factory=list)
     sb_group: str = ""          # 当前分组名（只有这个分组参与出口）
+    # 已经「认领」过的节点名：新拉到的节点自动补进第一个分组，
+    # 而用户手工移出分组的节点不会因为「没归属」被塞回去（只有一个分组时尤其明显）
+    sb_group_seen: list[str] = Field(default_factory=list)
     # 被用户停用的节点 name 列表（仍在订阅里，但不进 selector / 不分流）
     sb_disabled: list[str] = Field(default_factory=list)
     # 被用户删除的节点 name 黑名单（订阅里还有，但不再出现在列表/配置里）

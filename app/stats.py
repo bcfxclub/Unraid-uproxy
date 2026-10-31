@@ -81,7 +81,10 @@ def snapshot() -> dict:
         running = outlets.sb_status(cfg).get("running")
 
     if not (running and name):
-        return {"ok": True, "running": False, "mode": mode}
+        return {"ok": True, "running": False, "mode": mode, "now": ""}
+
+    # 「自动（延迟最低）」现在用的是哪台：只有 sing-box 自己知道（urltest 选的）
+    now_tag = outlets.sb_now().get("tag") if mode == "singbox" else ""
 
     conns_list = _sb_conns() if mode == "singbox" else None
     conns = len(conns_list) if conns_list is not None else None
@@ -94,7 +97,7 @@ def snapshot() -> dict:
 
     net = _docker_netio(name)
     if net is None:
-        return {"ok": True, "running": True, "mode": mode,
+        return {"ok": True, "running": True, "mode": mode, "now": now_tag,
                 "conns": conns, "conns_by_node": conns_by_node}
 
     now = time.time()
@@ -107,7 +110,7 @@ def snapshot() -> dict:
     _prev[name] = {"rx": net["rx"], "tx": net["tx"], "t": now}
 
     return {
-        "ok": True, "running": True, "mode": mode,
+        "ok": True, "running": True, "mode": mode, "now": now_tag,
         "down_bytes": net["rx"], "up_bytes": net["tx"],
         "down_rate": down_rate, "up_rate": up_rate,
         "conns": conns, "conns_by_node": conns_by_node,

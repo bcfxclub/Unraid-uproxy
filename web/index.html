@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>uproxy · Unraid 出网加速</title>
-<link rel="stylesheet" href="/static/style.css?v=41">
+<link rel="stylesheet" href="/static/style.css?v=46">
 </head>
 <body>
 
@@ -132,11 +132,15 @@
           </button>
           <div class="dstate-sub">
             <span id="dashNodeMeta" class="dtype">—</span>
-            <span id="dashDelay" class="dpill">—</span>
+            <span id="dashNodeMode" class="dpill">自动</span>
+          </div>
+          <div class="dstate-sub">
+            <span id="dashDelay" class="dpill">TCP —</span>
+            <span id="dashDelayHttp" class="dpill">HTTP —</span>
           </div>
         </div>
         <div class="drow">
-          <button id="btnDashGroupEdit" class="linkbtn">编辑分组</button>
+          <button id="btnDashGroupEdit" class="linkbtn" title="改名 / 勾选成员（齿轮里是测速参数）">编辑分组</button>
           <span class="grow"></span>
           <span id="dashGroupCount" class="dmuted"></span>
           <button class="linkbtn" data-goto="subs">增删节点</button>
@@ -200,7 +204,7 @@
           <button id="btnDashTest" class="mini" title="测当前代理组里的节点">测速</button>
         </div>
         <div id="dashLatency" class="dlat"></div>
-      </div>
+        <div class="dlfoot">左列 TCP 握手 · 右列实测网址（在「目标 ▾」里选）</div>      </div>
 
       <!-- 订阅 -->
       <div class="card dspan-3 dash-card">
@@ -559,6 +563,6 @@
 </div>
 
 <div id="toast" class="toast"></div>
-<script src="/static/app.js?v=41"></script>
+<script src="/static/app.js?v=46"></script>
 </body>
 </html>

@@ -10,6 +10,8 @@ import os
 import re
 import shutil
 import socket
+import time
+import urllib.request
 
 from . import groups
 from . import host
@@ -361,15 +363,21 @@ def _sb_config(cfg: st.AppCfg, version: tuple[int, int] | None = None,
                      "final": "223.5.5.5"}
 
     built = route.build(cfg, modern=modern, select_tag=select_tag)
+    probe_url, probe_interval, strategy = groups.probe(cfg, grp["name"])
     if selected:
+        # 显式选了节点就以它为准（等价手动固定），不再让 urltest 抢走
         group_out: dict = {"type": "selector", "tag": select_tag,
                            "outbounds": gtags, "default": selected}
+    elif strategy == "select":
+        # 类型=手动选择：不自动挑，固定到组内选中节点（没选就第一台）
+        group_out = {"type": "selector", "tag": select_tag, "outbounds": gtags,
+                     "default": selected or (gtags[0] if gtags else "")}
     else:
-        # 分组没指定节点 = 「自动（延迟最低）」：交给 urltest 真去挑最快的那台，
-        # 而不是在这里假装有个自动。sing-box 会按 url 定期重测。
+        # 「自动（延迟最低）」：交给 urltest 真去挑最快的那台，而不是假装有个自动。
+        # 探测地址与间隔来自分组自己的配置（仪表板齿轮里可改）。
         group_out = {"type": "urltest", "tag": select_tag, "outbounds": gtags,
-                     "url": "https://www.gstatic.com/generate_204",
-                     "interval": "3m", "tolerance": 50}
+                     "url": probe_url,
+                     "interval": f"{probe_interval}s", "tolerance": 50}
     outbounds = [
         group_out,
         *[n["outbound"] for n in nodes],
@@ -500,3 +508,41 @@ def sb_status(cfg: st.AppCfg) -> dict:
     s = _status(SB_NAME)
     s["endpoint"] = f"http://{SB_NAME}:{cfg.outlet.sb_port}"
     return s
+
+
+# sing-box 在容器内开了 clash_api（见 _sb_config），用它问「自动分组现在用的是哪台」
+_CLASH = "http://uproxy-singbox:9099"
+_CLASH_SECRET = "uproxy"
+_NOW_CACHE = {"t": 0.0, "tag": "", "running": None}
+
+
+def sb_now(ttl: float = 8.0) -> dict:
+    """当前分组在 sing-box 里实际用的节点（urltest 自己挑的那台）。
+
+    「自动（延迟最低）」不是空标签：真值在 sing-box 里，只有问它才知道现在选的是谁。
+    拿不到（没起容器 / 老镜像没开 api）时返回空字符串，界面自己降级成「自动」。
+    结果缓存 ttl 秒，避免统计轮询每 1.5s 打一次 docker inspect。
+    """
+    now = time.time()
+    if ttl > 0 and now - float(_NOW_CACHE["t"] or 0) < ttl:
+        return {"tag": _NOW_CACHE["tag"], "running": _NOW_CACHE["running"]}
+    running = bool(_status(SB_NAME).get("running"))
+    tag = ""
+    if running:
+        try:
+            req = urllib.request.Request(
+                f"{_CLASH}/proxies/{route_tag()}",
+                headers={"Authorization": f"Bearer {_CLASH_SECRET}"},
+            )
+            with urllib.request.urlopen(req, timeout=3) as r:
+                d = json.loads(r.read().decode("utf-8") or "{}")
+            tag = str(d.get("now") or "")
+        except Exception:
+            tag = ""
+    _NOW_CACHE.update(t=now, tag=tag, running=running)
+    return {"tag": tag, "running": running}
+
+
+def route_tag() -> str:
+    """分组出站的 tag（route.build 的默认值，多处引用，集中放这里）。"""
+    return "select"

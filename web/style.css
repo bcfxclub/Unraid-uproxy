@@ -875,3 +875,85 @@ table.data th { color: var(--muted); font-weight: 400; }
 .ged-item input[type="checkbox"] { width: 14px; height: 14px; accent-color: var(--accent); }
 .modal-btns button.danger { color: var(--bad); border-color: rgba(224, 106, 90, 0.35); }
 .modal-btns button.danger:hover { background: var(--bad-soft); }
+
+/* ============================================================
+   代理组：测速配置弹窗、双延迟显示
+   ============================================================ */
+.ged-title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.ged-gname {
+  color: var(--accent); font-family: var(--mono); font-size: 15px;
+  letter-spacing: .5px;
+}
+.modal-hint { margin: -2px 0 8px; font-size: 11px; color: var(--muted); }
+.modal .geditor select.modal-input {
+  appearance: none; -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 16px) 51%, calc(100% - 11px) 51%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 28px;
+}
+
+/* 编辑弹窗里每行的延迟（两种并排，窄了自动省略） */
+.ged-lat {
+  flex: 0 1 auto; min-width: 0; max-width: 150px;
+  font-size: 10.5px; color: var(--muted); font-family: var(--mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* 节点延迟卡片：名称 | 条形 | TCP | HTTP 四列 */
+.dash-card .dlrow { grid-template-columns: minmax(0, 1.45fr) minmax(0, .9fr) 44px 46px; }
+.dlms.http { color: var(--muted); opacity: .85; }
+.dlrow.cur .dlms.http { color: var(--accent); opacity: .7; }
+.dlfoot { font-size: 10.5px; color: var(--muted); opacity: .8; margin-top: -2px; }
+
+/* .pop button 的 padding 会把 22px 宽的图标按钮挤成 2px（图标看起来像两个点），
+   这里用更高优先级把它压回去 */
+.pop button.pg-ico { padding: 0; width: 24px; height: 24px; flex: 0 0 24px; }
+.pop button.pg-ico svg { width: 15px; height: 15px; }
+.pop button.pg-ico:hover { background: var(--card); color: var(--accent); }
+.pop button.pg-ico.del:hover { color: var(--bad); }
+
+/* 深色滚动条：默认的白色滚动条在弹窗/菜单里太扎眼 */
+.pop, .ged-list, .dsubs, .dash-card .dlat {
+  scrollbar-width: thin;
+  scrollbar-color: #55503f transparent;
+}
+.pop::-webkit-scrollbar, .ged-list::-webkit-scrollbar,
+.dsubs::-webkit-scrollbar, .dash-card .dlat::-webkit-scrollbar { width: 8px; }
+.pop::-webkit-scrollbar-thumb, .ged-list::-webkit-scrollbar-thumb,
+.dsubs::-webkit-scrollbar-thumb, .dash-card .dlat::-webkit-scrollbar-thumb {
+  background: #4a4538; border-radius: 999px;
+}
+.pop::-webkit-scrollbar-track, .ged-list::-webkit-scrollbar-track,
+.dsubs::-webkit-scrollbar-track, .dash-card .dlat::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 编辑弹窗右侧：延迟与协议之间加一道分隔，别糊在一起 */
+.ged-lat { text-align: right; }
+.ged-type { padding-left: 8px; border-left: 1px solid var(--line); }
+
+/* 编辑弹窗每行改成网格：勾选 | 名称 | 两种延迟 | 协议，
+   名称自己省略、右侧固定宽，65 个节点也不会把协议挤出弹窗 */
+.ged-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto 58px;
+  align-items: center;
+  gap: 8px;
+}
+.ged-lat { max-width: none; }
+.ged-type {
+  padding-left: 8px; text-align: right;
+  border-left: 1px solid var(--line);
+}
+.modal.geditor { max-width: 500px; }
+
+/* 节点菜单里标记「sing-box 当前在用」的那台 */
+.nd-live {
+  margin-left: 6px; padding: 0 6px; border-radius: 999px;
+  font-size: 10px; line-height: 15px; vertical-align: 1px;
+  color: var(--accent); background: var(--accent-soft);
+  border: 1px solid rgba(230, 182, 79, .3);
+}

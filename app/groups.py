@@ -20,9 +20,37 @@ DEFAULT_NAME = "PROXY"
 MAX_NAME = 20
 MAX_GROUPS = 16
 
+# 「自动」分组靠 sing-box 的 urltest 出站真去测，这里给它的默认探测参数
+DEFAULT_PROBE_URL = "https://www.gstatic.com/generate_204"
+DEFAULT_INTERVAL = 60          # 秒
+MIN_INTERVAL, MAX_INTERVAL = 10, 3600
+# urltest = 最小时延优先（自动挑最快的）；select = 手动挑（固定节点 / 组内第一台）
+STRATEGIES = ("urltest", "select")
+
 
 def _clean(name: Any) -> str:
     return " ".join(str(name or "").split())[:MAX_NAME]
+
+
+def _probe_url(value: Any) -> str:
+    """探测地址：只收 http(s)，别的一律回默认值，免得把配置写坏。"""
+    url = str(value or "").strip()
+    if url.startswith("http://") or url.startswith("https://"):
+        return url[:300]
+    return DEFAULT_PROBE_URL
+
+
+def _probe_interval(value: Any) -> int:
+    try:
+        n = int(float(str(value or "").strip().rstrip("sS")))
+    except (TypeError, ValueError):
+        return DEFAULT_INTERVAL
+    return max(MIN_INTERVAL, min(MAX_INTERVAL, n))
+
+
+def _strategy(value: Any) -> str:
+    s = str(value or "").strip().lower()
+    return s if s in STRATEGIES else STRATEGIES[0]
 
 
 def enabled_nodes(cfg) -> list[dict]:
@@ -72,17 +100,32 @@ def ensure(cfg) -> list[dict]:
             members = [x for x in members if x in valid]
         node = str(g.get("node") or "")
         groups.append({"name": name, "nodes": members,
-                       "node": node if node in members else ""})
+                       "node": node if node in members else "",
+                       "url": _probe_url(g.get("url")),
+                       "interval": _probe_interval(g.get("interval")),
+                       "strategy": _strategy(g.get("strategy"))})
 
     if not groups:
         legacy = str(cfg.outlet.sb_node or "")
         groups = [{"name": DEFAULT_NAME, "nodes": list(names(cfg)),
-                   "node": legacy if legacy in valid else ""}]
+                   "node": legacy if legacy in valid else "",
+                   "url": DEFAULT_PROBE_URL, "interval": DEFAULT_INTERVAL,
+                   "strategy": "urltest"}]
 
     assigned = {x for g in groups for x in g["nodes"]}
-    extra = [n for n in valid if n not in assigned] if valid else []
-    if extra:
-        groups[0]["nodes"].extend(extra)
+    if valid:
+        # 只把「没见过的新节点」补进第一个组。
+        # 不能拿「没归属」当条件：只剩一个分组时，用户移出去的节点全都没归属，
+        # 一保存就被塞回来（数量看着永远减不下去）。
+        seen = set(cfg.outlet.sb_group_seen or [])
+        if not seen:
+            # 老配置第一次升级上来：先把现有节点全部认账，别把历史移除的塞回去
+            cfg.outlet.sb_group_seen = list(valid)
+        else:
+            fresh = [n for n in valid if n not in seen and n not in assigned]
+            if fresh:
+                groups[0]["nodes"].extend(fresh)
+            cfg.outlet.sb_group_seen = list(valid)
 
     cfg.outlet.sb_groups = groups
     names_set = {g["name"] for g in groups}
@@ -116,7 +159,9 @@ def create(cfg, name: Any, nodes=None) -> str:
     if len(cfg.outlet.sb_groups) >= MAX_GROUPS:
         raise ValueError(f"最多只能有 {MAX_GROUPS} 个分组")
     members = _valid_nodes(cfg, nodes)
-    cfg.outlet.sb_groups.append({"name": n, "nodes": members, "node": ""})
+    cfg.outlet.sb_groups.append({"name": n, "nodes": members, "node": "",
+                                 "url": DEFAULT_PROBE_URL, "interval": DEFAULT_INTERVAL,
+                                 "strategy": "urltest"})
     # 新建就是为了用：直接切过去，卡片上立刻能看见
     cfg.outlet.sb_group = n
     cfg.outlet.sb_node = ""
@@ -170,6 +215,49 @@ def update(cfg, name: Any, nodes=None, node: Any = None) -> str:
     if g["node"] and g["node"] not in g["nodes"]:
         g["node"] = ""
     return f"分组「{n}」已保存（{len(g['nodes'])} 个节点）"
+
+
+def configure(cfg, name: Any, url: Any = None, interval: Any = None,
+              strategy: Any = None) -> str:
+    """配置分组的测速方式：探测地址 / 间隔 / 类型（最小时延优先 or 手动）。
+
+    这些不是界面装饰：urltest 出站的 url / interval 直接取自这里，
+    类型为 select 时则生成 selector 出站（不再自动挑）。
+    """
+    ensure(cfg)
+    n = _clean(name)
+    g = _find(cfg, n)
+    if g is None:
+        raise ValueError(f"分组「{n}」不存在")
+    if url is not None:
+        raw = str(url or "").strip()
+        if raw and not (raw.startswith("http://") or raw.startswith("https://")):
+            raise ValueError("探测地址要以 http:// 或 https:// 开头")
+        g["url"] = _probe_url(raw)
+    if interval is not None:
+        try:
+            n_sec = int(float(str(interval).strip().rstrip("sS")))
+        except (TypeError, ValueError):
+            raise ValueError("探测间隔要填秒数（10 ~ 3600）") from None
+        if n_sec < MIN_INTERVAL or n_sec > MAX_INTERVAL:
+            raise ValueError(f"探测间隔请填 {MIN_INTERVAL} ~ {MAX_INTERVAL} 秒")
+        g["interval"] = n_sec
+    if strategy is not None:
+        s = str(strategy or "").strip().lower()
+        if s not in STRATEGIES:
+            raise ValueError("类型只能是 urltest（最小时延优先）或 select（手动选择）")
+        g["strategy"] = s
+    as_text = "最小时延优先" if g["strategy"] == "urltest" else "手动选择"
+    return f"分组「{n}」测速配置已保存（{as_text}，{g['interval']}s）"
+
+
+def probe(cfg, name: str = "") -> tuple[str, int, str]:
+    """给生成配置用：返回 (探测地址, 间隔秒, 类型)。"""
+    g = _find(cfg, _clean(name)) if name else active(cfg)
+    if g is None:
+        g = active(cfg)
+    return (_probe_url(g.get("url")), _probe_interval(g.get("interval")),
+            _strategy(g.get("strategy")))
 
 
 def set_active(cfg, name: Any) -> str:

@@ -199,9 +199,11 @@ function dotsBtn(onClick) {
 }
 
 /* 卡片上常显的「删除」按钮（垃圾桶图标），不用展开菜单就能点 */
-const TRASH_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-  + 'stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/>'
-  + '<path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
+const TRASH_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+  + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+  + '<polyline points="3 6 5 6 21 6"/>'
+  + '<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'
+  + '<path d="M10 11v6"/><path d="M14 11v6"/></svg>';
 
 function icoDel(title, onClick) {
   const b = el("button", "ico-del");
@@ -688,7 +690,9 @@ const nodeState = {
   lastSeq: 0,       // 日志增量拉取游标
 };
 let nodeCache = [];   // 当前节点全集（含 source）
-let delayMap = {};    // name -> {ms, reachable} 缓存测速结果
+let delayMap = {};    // name -> 最近一次测速结果（排序用）
+let delayTcp = {};    // name -> TCP 握手结果
+let delayHttp = {};   // name -> 自定义网址实测结果
 
 function nodeSources() {
   const set = new Set(nodeCache.map((n) => n.source).filter(Boolean));
@@ -847,6 +851,14 @@ function syncTestButtons() {
     run.title = (t.tcp ? "对全部节点做 TCP 握手测速" : `经每个节点真实访问 ${t.url}`)
       + (testSortOn() ? "，测完按延迟重排并保存顺序" : "");
   }
+  // 仪表板「节点延迟」卡片的测速按钮跟着目标走，别让人猜这次测的是哪种
+  const dash = $("#btnDashTest");
+  if (dash && !dash.disabled) {
+    dash.textContent = t.tcp ? "测速 TCP" : "测速 HTTP";
+    dash.title = t.tcp
+      ? "对本组节点做 TCP 握手测速（3 秒超时）"
+      : `经每个节点真实访问 ${t.url}`;
+  }
 }
 
 /* 延迟结果的展示口径：HTTP 实测和 TCP 握手不能混为一谈 */
@@ -871,6 +883,31 @@ function delayTitle(r) {
     ? `经该节点访问 ${r.url || "测试地址"}${r.code ? `（HTTP ${r.code}）` : ""} 的实际耗时`
     : "TCP 握手耗时（只连节点端口，不代表能出网）";
   return r.error ? `${head}\n失败原因：${r.error}` : head;
+}
+
+/* 两种延迟分开存：TCP 握手只连节点端口，HTTP 是真经节点访问网址，
+   同一台节点两个数常常差一个量级，混成一个数会误导人。 */
+function latOf(name, kind) {
+  return (kind === "http" ? delayHttp[name] : delayTcp[name]) || null;
+}
+
+/* 卡片/菜单里的短格式：TCP 149ms / HTTP 320ms / 超时 / — */
+function latShort(r, kind) {
+  const tag = kind === "http" ? "HTTP" : "TCP";
+  if (!r) return `${tag} —`;
+  if (!r.reachable) return `${tag} 超时`;
+  if (r.ms === null || r.ms === undefined) {
+    return `${tag} ${r.code ? `HTTP ${r.code}` : "OK"}`;
+  }
+  return `${tag} ${r.ms}ms`;
+}
+
+/* 菜单里紧凑一点：不带前缀，前缀在行首统一给 */
+function msShort(r) {
+  if (!r) return "—";
+  if (!r.reachable) return "超时";
+  if (r.ms === null || r.ms === undefined) return r.mode === "http" && r.code ? `HTTP ${r.code}` : "OK";
+  return `${r.ms}ms`;
 }
 
 /* 测速排序：延迟低的在前，超时/失败/没测过的垫底。
@@ -951,8 +988,14 @@ async function runNodeTest(names, mode, url, opts) {
   }
 
   const res = d.results || [];
-  if (!names) delayMap = {};
-  res.forEach((r) => { delayMap[r.tag] = r; });
+  if (!names) {
+    // 全量测速：只清本次这一种结果，另一种保留着（两种要同时显示）
+    if (mode === "tcp") { delayMap = {}; delayTcp = {}; } else { delayHttp = {}; }
+  }
+  res.forEach((r) => {
+    delayMap[r.tag] = r;
+    if (r.mode === "http") delayHttp[r.tag] = r; else delayTcp[r.tag] = r;
+  });
 
   // 全部测速完成 → 按延迟重排并落盘；单节点测速不动顺序，免得卡片乱跳
   // （首页测「当前分组」时传 opts.sort，顺序照样跟着最新结果走）
@@ -1913,14 +1956,18 @@ async function boot() {
 /* ---------------- 首页仪表板 ----------------
    把「能不能用」的关键信息摆到一屏：出口活着没、现在是哪个节点、走什么分流、
    哪个节点最快、订阅还新不新。所有控件都直接对接真实接口，不做假动作。 */
-const GEAR_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
-  + 'stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/>'
-  + '<path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 '
-  + '1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8 '
-  + 'l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.9 '
-  + 'l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 '
-  + '1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1 '
-  + 'a1.7 1.7 0 00-1.5 1z"/></svg>';
+const GEAR_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+  + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+  + '<circle cx="12" cy="12" r="3"/>'
+  + '<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06'
+  + 'a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09'
+  + 'A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83'
+  + 'l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09'
+  + 'A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0'
+  + 'l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09'
+  + 'a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83'
+  + 'l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09'
+  + 'a1.65 1.65 0 0 0-1.51 1z"/></svg>';
 
 /* ---------------- 代理分组（仪表板「代理组」卡片用） ----------------
    后端 sb_groups = [{name, nodes:[节点名], node:选中的节点}]，只有「当前分组」
@@ -2043,9 +2090,21 @@ const Dash = (function () {
   }
 
   /* ---- 代理组：分组胶囊 + 节点胶囊（照 v2rayA 的做法：选组 → 选节点） ---- */
+  let liveNow = "";   // 「自动」时 sing-box 实际在用的节点（由 /api/outlet/stats 带回）
+
+  /* 现在真正在用的节点：固定就是固定的；自动优先用 sing-box 报的 now，
+     容器没起时退到本组测速最快的那个，只为让人看到「自动」指的是哪台。 */
+  function currentNode(g) {
+    if (g.node) return g.node;
+    if (liveNow && (g.nodes || []).includes(liveNow)) return liveNow;
+    const best = groupBest();
+    return best ? best.n.name : "";
+  }
+
   function renderGroup() {
     const g = activeGroup();
     const pinned = !!g.node;
+    const cur = currentNode(g);
 
     const gn = $("#dashGroupName");
     if (gn) gn.textContent = g.name;
@@ -2055,34 +2114,59 @@ const Dash = (function () {
     if (lg) lg.textContent = g.name;
 
     const nn = $("#dashNodeName");
-    if (nn) nn.textContent = pinned ? g.node : "自动（延迟最低）";
+    if (nn) nn.textContent = cur || "自动（延迟最低）";
     const btn = $("#btnDashNode");
     if (btn) {
       btn.title = pinned
         ? `当前固定「${g.node}」，点这里换节点或改回自动`
-        : "自动挑本组延迟最低的节点，点这里手动指定";
+        : (cur
+          ? `自动选择，当前走「${cur}」（sing-box 每 ${g.interval || 60}s 重测一次），点这里手动指定`
+          : "自动挑本组延迟最低的节点，点这里手动指定");
     }
 
-    const node = pinned ? groupNodes().find((n) => n.name === g.node) : null;
+    const node = cur ? groupNodes().find((n) => n.name === cur) : null;
     const meta = $("#dashNodeMeta");
     if (meta) {
-      meta.textContent = pinned
-        ? (node ? (node.type || "节点") : "已不在本组")
-        : `本组 ${(g.nodes || []).length} 个节点 · 自动`;
+      meta.textContent = node
+        ? (node.type || "节点")
+        : `${(g.nodes || []).length} 个节点`;
       meta.title = node ? `${node.server}:${node.port}` : "";
     }
 
-    const best = groupBest();
-    const d = pinned ? delayMap[g.node] : (best && best.r);
+    // 「自动（N 个成员）」/「已固定」：一眼看出这个分组现在是自动还是钉死的
+    const mode = $("#dashNodeMode");
+    if (mode) {
+      const n = (g.nodes || []).length;
+      mode.textContent = pinned ? "已固定"
+        : (g.strategy === "select" ? `手动（${n} 个成员）` : `自动（${n} 个成员）`);
+      mode.className = "dpill" + (pinned ? " pin" : "");
+      mode.title = pinned
+        ? "已固定到这个节点，sing-box 不会再自动挑"
+        : (g.strategy === "select"
+          ? "分组类型是「手动选择」：用组内第一台，不自动挑；齿轮里可改成最小时延优先"
+          : "sing-box 用 urltest 自动挑延迟最低的，齿轮里可改探测地址与间隔");
+    }
+
+    // 两种延迟并排显示：TCP 握手 / 实测网址（同一台节点两个数常常差很远）
     const pd = $("#dashDelay");
     if (pd) {
-      pd.textContent = d ? delayText(d) : "未测速";
-      pd.className = "dpill" + (d ? ` ${delayKind(d)}` : "");
-      pd.title = d ? delayTitle(d) : "点「节点延迟」卡片里的测速按钮";
+      const r = cur ? latOf(cur, "tcp") : null;
+      pd.textContent = latShort(r, "tcp");
+      pd.className = "dpill" + (r ? ` ${delayKind(r)}` : "");
+      pd.title = r ? delayTitle(r) : "点「节点延迟」卡片右侧的「测速」跑一轮 TCP 握手";
+    }
+    const ph = $("#dashDelayHttp");
+    if (ph) {
+      const r = cur ? latOf(cur, "http") : null;
+      ph.textContent = latShort(r, "http");
+      ph.className = "dpill" + (r ? ` ${delayKind(r)}` : "");
+      ph.title = r
+        ? delayTitle(r)
+        : "还没实测过：在「订阅」页的「目标 ▾」里选一个网址，再点「测速」";
     }
   }
 
-  /* 分组菜单：✓ 当前分组 / 齿轮改名和选节点 / 垃圾桶删除 / + 创建 */
+  /* 分组菜单：✓ 当前分组 / 齿轮配测速 / 垃圾桶删除 / + 创建 */
   function groupMenu() {
     const cur = activeGroup().name;
     const items = [{ node: el("div", "pop-head", "代理分组") }];
@@ -2094,12 +2178,12 @@ const Dash = (function () {
 
       const gear = el("button", "pg-ico");
       gear.type = "button";
-      gear.title = "编辑分组（改名 / 选节点）";
+      gear.title = `测速配置「${g.name}」：探测 URL / 间隔 / 类型`;
       gear.innerHTML = GEAR_SVG;
       gear.addEventListener("click", (e) => {
         e.stopPropagation();
         Pop.close();
-        safe(() => openGroupEditor(g), "编辑分组");
+        safe(() => openProbeEditor(g), "测速配置");
       });
       row.appendChild(gear);
 
@@ -2134,6 +2218,75 @@ const Dash = (function () {
     return items;
   }
 
+  /* 齿轮：分组自己的测速参数（探测 URL / 间隔 / 类型）。
+     这些值直接写进 sing-box 的 urltest 出站，不是界面装饰。 */
+  function openProbeEditor(g) {
+    const mask = el("div", "modal-mask");
+    const box = el("div", "modal geditor");
+
+    const h = el("h3", "ged-title");
+    h.appendChild(document.createTextNode("代理分组 "));
+    h.appendChild(el("span", "ged-gname", g.name));
+    box.appendChild(h);
+    box.appendChild(el("p", "modal-note",
+      "「自动」由 sing-box 的 urltest 出站实现：按下面的间隔访问探测地址，"
+      + "在本组里挑延迟最低的节点。改完保存后，重启 sing-box 生效。"));
+
+    box.appendChild(el("label", "modal-lbl", "探测 URL"));
+    const url = el("input", "modal-input");
+    url.value = g.url || "https://www.gstatic.com/generate_204";
+    url.placeholder = "https://www.gstatic.com/generate_204";
+    box.appendChild(url);
+
+    box.appendChild(el("label", "modal-lbl", "探测间隔"));
+    const iv = el("input", "modal-input");
+    iv.value = `${g.interval || 60}s`;
+    iv.placeholder = "60s";
+    box.appendChild(iv);
+    box.appendChild(el("p", "modal-hint", "填秒数，10 ~ 3600 之间；写 60 或 60s 都行。"));
+
+    box.appendChild(el("label", "modal-lbl", "类型"));
+    const sel = el("select", "modal-input");
+    [["urltest", "最小时延优先"], ["select", "手动选择"]].forEach(([v, t]) => {
+      const op = el("option", "", t);
+      op.value = v;
+      sel.appendChild(op);
+    });
+    sel.value = g.strategy === "select" ? "select" : "urltest";
+    box.appendChild(sel);
+
+    const row = el("div", "modal-btns");
+    const cancel = el("button", "", "取消");
+    const ok = el("button", "primary", "保存");
+    cancel.addEventListener("click", () => mask.remove());
+    ok.addEventListener("click", () => safe(async () => {
+      const interval = String(iv.value || "").trim().replace(/s$/i, "");
+      ok.disabled = true;
+      try {
+        const d = await api("/api/groups", "POST", {
+          config: { name: g.name, url: url.value.trim(), interval: interval || g.interval,
+                    strategy: sel.value },
+        });
+        if (d.ok === false) { toast(d.message || "保存失败"); return; }
+        mask.remove();
+        toast(d.message + (d.need_restart ? "，重启 sing-box 后生效" : ""));
+        await loadState();
+      } finally { ok.disabled = false; }
+    }, "保存测速配置"));
+    row.append(cancel, ok);
+    box.appendChild(row);
+
+    mask.appendChild(box);
+    mask.addEventListener("click", (e) => { if (e.target === mask) mask.remove(); });
+    mask.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") mask.remove();
+      if (e.key === "Enter") ok.click();
+    });
+    document.body.appendChild(mask);
+    url.focus();
+    url.select();
+  }
+
   /* 节点菜单：自动（延迟最低）在最前，下面是本组节点（协议 + 延迟） */
   function nodeMenu() {
     const g = activeGroup();
@@ -2144,12 +2297,26 @@ const Dash = (function () {
     const am = el("div", "nd-main");
     am.appendChild(el("div", "nd-name", "自动（延迟最低）"));
     const best = groupBest();
-    am.appendChild(el("div", "nd-meta", best
-      ? `本组最快 ${best.n.name} · ${best.r.ms}ms`
-      : "按延迟自动挑本组最快的节点"));
+    // 「自动」到底用哪台：sing-box 跑着就以它报的为准，没跑就退到本组最快
+    const pick = liveNow && (g.nodes || []).includes(liveNow)
+      ? liveNow : (best ? best.n.name : "");
+    const pickTcp = pick ? latOf(pick, "tcp") : null;
+    const pickHttp = pick ? latOf(pick, "http") : null;
+    const bestBits = pick
+      ? [`${liveNow ? "当前走" : "本组最快"} ${pick}`]
+      : [];
+    if (pickTcp) bestBits.push(`TCP ${msShort(pickTcp)}`);
+    if (pickHttp) bestBits.push(`HTTP ${msShort(pickHttp)}`);
+    am.appendChild(el("div", "nd-meta", bestBits.length
+      ? bestBits.join(" · ")
+      : (g.strategy === "select" ? "类型是手动选择，不会自动挑" : "按延迟自动挑本组最快的节点")));
     auto.appendChild(am);
     auto.addEventListener("click", () => {
       Pop.close();
+      if (g.strategy === "select") {
+        toast("这个分组是「手动选择」类型，先在齿轮里改成「最小时延优先」");
+        return;
+      }
       safe(() => selectNode(""), "自动选择");
     });
     items.push({ node: auto });
@@ -2157,14 +2324,23 @@ const Dash = (function () {
     const list = groupNodes();
     if (list.length) items.push({ sep: true });
     list.forEach((n) => {
-      const r = delayMap[n.name];
+      const tcp = latOf(n.name, "tcp");
+      const http = latOf(n.name, "http");
       const row = el("div", "nd-row");
       row.appendChild(el("span", "nd-check", n.name === g.node ? "✓" : ""));
       const main = el("div", "nd-main");
-      main.appendChild(el("div", "nd-name", n.name));
+      const nameRow = el("div", "nd-name");
+      nameRow.appendChild(document.createTextNode(n.name));
+      // 自动模式下把 sing-box 正在用的那台标出来，省得去猜「自动」选了谁
+      if (!g.node && n.name === liveNow) nameRow.appendChild(el("span", "nd-live", "当前"));
+      main.appendChild(nameRow);
+      // 两种延迟一起给：TCP 是握手，HTTP 是真出网，差一个量级很正常
       const bits = [n.type || ""];
-      if (r) bits.push(delayText(r).replace(/^(TCP|HTTP) /, ""));
-      main.appendChild(el("div", "nd-meta", bits.filter(Boolean).join(" · ")));
+      if (tcp) bits.push(`TCP ${msShort(tcp)}`);
+      if (http) bits.push(`HTTP ${msShort(http)}`);
+      const meta = el("div", "nd-meta", bits.filter(Boolean).join(" · "));
+      meta.title = [tcp && delayTitle(tcp), http && delayTitle(http)].filter(Boolean).join("\n");
+      main.appendChild(meta);
       row.appendChild(main);
       row.addEventListener("click", () => {
         Pop.close();
@@ -2230,6 +2406,17 @@ const Dash = (function () {
       });
       lab.appendChild(cb);
       lab.appendChild(el("span", "ged-name", n.name));
+      // 选成员时也把两种延迟摆出来，方便「只留快的」这种操作
+      const tcp = latOf(n.name, "tcp");
+      const http = latOf(n.name, "http");
+      const bits = [];
+      if (tcp) bits.push(`TCP ${msShort(tcp)}`);
+      if (http) bits.push(`HTTP ${msShort(http)}`);
+      if (bits.length) {
+        const lat = el("span", "ged-lat", bits.join(" · "));
+        lat.title = [tcp && delayTitle(tcp), http && delayTitle(http)].filter(Boolean).join("\n");
+        lab.appendChild(lat);
+      }
       lab.appendChild(el("span", "ged-type", n.type || ""));
       lab.setAttribute("data-q", `${n.name} ${n.type || ""}`.toLowerCase());
       list.appendChild(lab);
@@ -2366,7 +2553,7 @@ const Dash = (function () {
     return runNodeTest(names, "tcp", null, { silent: true, sort: true }).catch(() => {});
   }
 
-  /* ---- 节点延迟：测的是「当前代理组」里的节点 ---- */
+  /* ---- 节点延迟：测的是「当前代理组」里的节点，TCP / HTTP 两列并排 ---- */
   function renderLatency() {
     const box = $("#dashLatency");
     if (!box) return;
@@ -2377,8 +2564,10 @@ const Dash = (function () {
       box.appendChild(el("div", "muted", "当前分组没有节点，用上面的「编辑分组」勾几个进来。"));
       return;
     }
+    // 排序用 TCP（进页面自动跑的就是它）；没有 TCP 时退到任意一次结果
+    const keyOf = (n) => latOf(n.name, "tcp") || delayMap[n.name] || null;
     const measured = list.filter((n) => {
-      const r = delayMap[n.name];
+      const r = keyOf(n);
       return r && r.reachable && r.ms !== null && r.ms !== undefined;
     });
     if (!measured.length) {
@@ -2386,7 +2575,7 @@ const Dash = (function () {
         `点右上「测速」测这一组的 ${list.length} 个节点（按 TCP 握手）。`));
       return;
     }
-    const rowsAll = list.map((n) => ({ n, r: delayMap[n.name] || null }))
+    const rowsAll = list.map((n) => ({ n, r: keyOf(n) }))
       .sort((a, b) => {
         const ka = delayRank(a.r), kb = delayRank(b.r);
         if (ka !== kb) return ka - kb;
@@ -2394,15 +2583,16 @@ const Dash = (function () {
         return 0;
       });
     let rows = rowsAll.slice(0, 5);
-    // 固定的那个节点延迟不一定最低，但它才是当前出口，得让人看得见
-    if (g.node && !rows.some((x) => x.n.name === g.node)) {
-      const hit = rowsAll.find((x) => x.n.name === g.node);
+    // 当前出口（固定节点 / 自动选中的那台）延迟不一定最低，但它才是现在用的，得看得见
+    const curName = g.node || (liveNow && (g.nodes || []).includes(liveNow) ? liveNow : "");
+    if (curName && !rows.some((x) => x.n.name === curName)) {
+      const hit = rowsAll.find((x) => x.n.name === curName);
       if (hit) rows = rows.slice(0, 4).concat([hit]);
     }
-    const max = Math.max.apply(null, measured.map((n) => delayMap[n.name].ms)) || 1;
+    const max = Math.max.apply(null, measured.map((n) => keyOf(n).ms)) || 1;
     rows.forEach(({ n, r }) => {
       const ok = r && r.reachable && r.ms !== null && r.ms !== undefined;
-      const row = el("div", "dlrow" + (n.name === g.node ? " cur" : ""));
+      const row = el("div", "dlrow" + (n.name === curName ? " cur" : ""));
       row.title = ok
         ? `点一下把「${g.name}」固定到「${n.name}」`
         : `「${n.name}」本次没测通，点一下仍可固定到它`;
@@ -2414,6 +2604,11 @@ const Dash = (function () {
       bar.appendChild(fill);
       row.appendChild(bar);
       row.appendChild(el("div", "dlms", ok ? `${r.ms}ms` : (r ? "TIMEOUT" : "—")));
+      // 第二列：真经节点访问网址的耗时（没实测过就是 —）
+      const h = latOf(n.name, "http");
+      const hm = el("div", "dlms http", h ? msShort(h) : "—");
+      hm.title = h ? delayTitle(h) : "还没实测过：在「订阅」页「目标 ▾」选个网址后点测速";
+      row.appendChild(hm);
       row.addEventListener("click", () => safe(() => setActiveNode(n), "切换出口"));
       box.appendChild(row);
     });
@@ -2518,16 +2713,30 @@ const Dash = (function () {
     });
 
     const test = $("#btnDashTest");
-    if (test) test.addEventListener("click", () => safe(async () => {
-      const b = $("#btnDashTest");
-      const names = groupNodes().map((n) => n.name);
-      if (!names.length) { toast("当前分组没有节点"); return; }
-      b.disabled = true;
-      b.textContent = "测速中…";
-      try {
-        await runNodeTest(names, "tcp", null, { sort: true });
-      } finally { b.disabled = false; b.textContent = "测速"; }
-    }, "测速"));
+    if (test) {
+      // 按「目标 ▾」里存的对象测：TCP 握手或真实访问网址（两种延迟都要能看到）
+      const paint = () => {
+        const t = testTarget();
+        test.textContent = t.tcp ? "测速 TCP" : "测速 HTTP";
+        test.title = t.tcp
+          ? "对本组节点做 TCP 握手测速（3 秒超时）"
+          : `经每个节点真实访问 ${t.url}`;
+      };
+      paint();
+      test.addEventListener("click", () => safe(async () => {
+        const b = $("#btnDashTest");
+        const names = groupNodes().map((n) => n.name);
+        if (!names.length) { toast("当前分组没有节点"); return; }
+        const t = testTarget();
+        const mode = t.tcp ? "tcp" : "http";
+        b.disabled = true;
+        const label = b.textContent;
+        b.textContent = "测速中…";
+        try {
+          await runNodeTest(names, mode, mode === "http" ? t.url : null, { sort: true });
+        } finally { b.disabled = false; b.textContent = label; }
+      }, "测速"));
+    }
 
     const upd = $("#btnDashUpdateSubs");
     if (upd) upd.addEventListener("click", () => safe(async () => {
@@ -2565,6 +2774,12 @@ const Dash = (function () {
   function onStats(d) {
     last = d || null;
     renderCore();
+    // 「自动」到底走了哪台：sing-box 的 urltest 自己挑，只有它知道
+    const now = (d && d.now) || "";
+    if (now !== liveNow) {
+      liveNow = now;
+      renderGroup();
+    }
   }
 
   // 延迟/节点变化后由外部调（renderNodes / 测速结束时）

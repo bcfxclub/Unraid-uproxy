@@ -208,7 +208,7 @@ def api_state():
     cfg = st.load()
     # 分组是按节点集推导出来的：每次取状态先整理一遍，
     # 老配置没有分组时前端也能立刻看到「PROXY / 全部节点」
-    groupsm.ensure(cfg)
+    _groups_sync(cfg)
     return {"ok": True, "config": cfg.model_dump(), "probe": probe.snapshot()}
 
 
@@ -765,14 +765,37 @@ def api_subs_del(req: SubDelReq):
 # --------------------------------------------------------------------------
 # 代理分组（v2rayA 风格的「代理组」：分组 = 出口可用的节点集合）
 # --------------------------------------------------------------------------
+def _groups_sync(cfg: st.AppCfg) -> None:
+    """整理分组；有变化就落盘。
+
+    ensure() 会顺手更新「认领表」（sb_group_seen）。只在内存里改而不落盘，
+    下次请求又从旧配置开始，订阅新增的节点就永远补不进分组。
+    """
+    def snap():
+        o = cfg.outlet
+        return (repr(o.sb_groups), o.sb_group, o.sb_node, repr(o.sb_group_seen))
+
+    before = snap()
+    groupsm.ensure(cfg)
+    if snap() != before:
+        st.save(cfg)
+
+
 def _groups_view(cfg: st.AppCfg) -> dict:
-    gs = groupsm.ensure(cfg)
+    _groups_sync(cfg)
+    gs = cfg.outlet.sb_groups or []
     act = groupsm.active(cfg)
+    now = outlets.sb_now()
     return {
         "groups": [{"name": g["name"], "count": len(g["nodes"]), "nodes": g["nodes"],
-                    "node": g["node"], "auto": not g["node"]} for g in gs],
+                    "node": g["node"], "auto": not g["node"],
+                    "url": g.get("url") or groupsm.DEFAULT_PROBE_URL,
+                    "interval": g.get("interval") or groupsm.DEFAULT_INTERVAL,
+                    "strategy": g.get("strategy") or "urltest"} for g in gs],
         "active": act["name"],
         "group_node": act["node"],
+        # 自动分组时真正的出口节点由 urltest 决定，只有 sing-box 知道
+        "now": now.get("tag") or "",
         "nodes": [_node_view(n) for n in groupsm.enabled_nodes(cfg)],
         "sb_node": cfg.outlet.sb_node,
     }
@@ -784,6 +807,7 @@ class GroupReq(BaseModel):
     rename: dict = Field(default_factory=dict)    # {from, to}
     delete: str = ""
     update: dict = Field(default_factory=dict)    # {name, nodes, node}
+    config: dict = Field(default_factory=dict)    # {name, url, interval, strategy}
 
 
 @app.get("/api/groups", dependencies=[Depends(guard)])
@@ -804,6 +828,10 @@ def api_groups_post(req: GroupReq):
         elif req.update:
             msg = groupsm.update(cfg, req.update.get("name"),
                                  req.update.get("nodes"), req.update.get("node"))
+        elif req.config:
+            msg = groupsm.configure(cfg, req.config.get("name"),
+                                    req.config.get("url"), req.config.get("interval"),
+                                    req.config.get("strategy"))
         elif req.active:
             msg = groupsm.set_active(cfg, req.active)
         else:
@@ -843,6 +871,7 @@ def api_nodes(req: NodeReq):
                 cfg.outlet.sb_disabled = [to if d == frm else d for d in cfg.outlet.sb_disabled]
             cfg.outlet.sb_removed = [to if d == frm else d for d in cfg.outlet.sb_removed]
             cfg.outlet.sb_order = [to if d == frm else d for d in cfg.outlet.sb_order]
+            cfg.outlet.sb_group_seen = [to if d == frm else d for d in cfg.outlet.sb_group_seen]
             # 分组里引用的也是节点名，一起改名
             for g in cfg.outlet.sb_groups:
                 g["nodes"] = [to if x == frm else x for x in (g.get("nodes") or [])]
