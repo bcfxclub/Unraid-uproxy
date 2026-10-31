@@ -901,6 +901,10 @@ table.data th { color: var(--muted); font-weight: 400; }
   text-align: right; white-space: nowrap; overflow: hidden;
   cursor: pointer; opacity: .95;
 }
+.ged-ms .tag {
+  font-style: normal; font-size: 9px; opacity: .55;
+  letter-spacing: .2px; margin-right: 3px;
+}
 .ged-ms.none { opacity: .5; }
 .ged-ms.ok { color: var(--ok); }
 .ged-ms.warn { color: var(--warn); }
@@ -943,7 +947,7 @@ table.data th { color: var(--muted); font-weight: 400; }
    名称自己省略、右侧固定宽，65 个节点也不会把协议挤出弹窗 */
 .ged-item {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 56px 56px 52px;
+  grid-template-columns: auto minmax(0, 1fr) 66px 66px 52px;
   align-items: center;
   gap: 8px;
 }

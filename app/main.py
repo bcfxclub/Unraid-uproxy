@@ -135,6 +135,7 @@ class NodeTestReq(BaseModel):
     mode: str = "auto"      # auto（优先真实 HTTP，环境不支持则降级）/ http / tcp
     url: str = ""           # 自定义测试目标，空 = Google 204
     timeout: int = 5000     # 单节点超时（毫秒）
+    quiet: bool = False     # 界面自己发起的补测（如打开分组弹窗），不写日志
 
 
 @app.exception_handler(Exception)
@@ -544,7 +545,7 @@ def api_subs_test(req: NodeTestReq):
     r = nettest.test_nodes(nodes, mode=req.mode, url=req.url, timeout_ms=req.timeout)
     up = sum(1 for x in r["results"] if x.get("reachable"))
     total = len(r["results"])
-    if total:
+    if total and not req.quiet:
         tag = "HTTP 实测" if r["mode"] == "http" else "TCP 握手测速"
         target = r["url"] or "节点端口"
         note = r.get("note") or ""

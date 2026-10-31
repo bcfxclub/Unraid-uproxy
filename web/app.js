@@ -969,6 +969,7 @@ async function runNodeTest(names, mode, url, opts) {
   const tgt = mode === "http" ? { label: shortUrl(url), url: url } : null;
 
   const body = { mode: mode, timeout: mode === "tcp" ? 3000 : 5000 };
+  if (opt.quiet) body.quiet = true;      // 界面自己发起的补测，别写进日志
   if (tgt) body.url = tgt.url;
   if (names) body.nodes = nodeCache.filter((x) => names.includes(x.name));
 
@@ -2387,9 +2388,9 @@ const Dash = (function () {
     const chipUrl = el("button", "ged-mode", "URL");
     chipTcp.type = chipUrl.type = "button";
     chipTcp.title = "TCP 握手（每行左列）：只连节点端口，快，但只证明端口通。"
-      + "点一下测列表里的全部节点，有筛选就只测筛出来的";
+      + "点一下测列表里的全部节点（勾没勾都测），有筛选就只测筛出来的";
     chipUrl.title = `URL 实测（每行右列）：经节点访问 ${shortUrl(probeUrl())}，真出网的往返耗时。`
-      + "点一下测列表里的全部节点，有筛选就只测筛出来的";
+      + "点一下测列表里的全部节点（勾没勾都测），有筛选就只测筛出来的";
 
     const bAll = el("button", "linkbtn", "全选");
     const bInv = el("button", "linkbtn", "反选");
@@ -2411,14 +2412,16 @@ const Dash = (function () {
       return testTarget().url || TEST_TARGETS[0].url;
     }
 
-    /* 一格延迟：TCP 握手 / URL 实测各占一列，测过才给数字，没测就是「—」 */
+      /* 一格延迟：TCP 握手 / URL 实测各占一列，测过才给数字，没测就是「—」 */
     function paintCell(node, name, mode) {
       const r = latOf(name, mode);
       node.classList.toggle("none", !r);
       node.classList.toggle("ok", !!r && delayKind(r) === "ok");
       node.classList.toggle("warn", !!r && delayKind(r) === "warn");
       node.classList.toggle("bad", !!r && delayKind(r) === "bad");
-      node.textContent = r ? msShort(r) : "—";
+      clear(node);
+      node.appendChild(el("i", "tag", mode === "http" ? "URL" : "TCP"));
+      node.appendChild(document.createTextNode(r ? msShort(r) : "—"));
       node.title = r ? delayTitle(r)
         : `${mode === "http" ? "URL 实测" : "TCP 握手"}：还没测过，点这一格就单独测它`;
     }
@@ -2467,7 +2470,8 @@ const Dash = (function () {
     // 没筛选就测全部；筛了就只测筛出来的（先筛后测，省时间）
     const targetRows = () => (filter.value.trim() ? visibleRows() : rows);
 
-    let busy = false;
+    let busy = false;       // 手动测速中
+    let autoProbe = null;   // 打开弹窗时的补测（Promise，手动测速排在它后面）
 
     /* 焦点是哪一种测速：选中那列给足颜色、另一列压暗，两列数字不至于看混 */
     function setMode(mode) {
@@ -2495,6 +2499,8 @@ const Dash = (function () {
       if (!names.length) { toast("当前筛选下没有节点可测"); return; }
       setBusy(mode, names.length);
       try {
+        // 补测还在跑就先等它，免得两批结果前后脚回来互相覆盖
+        if (autoProbe) await autoProbe.catch(() => {});
         await runNodeTest(names, mode, mode === "http" ? probeUrl() : null, { sort: !only });
         rows.forEach(paintRow);
         // 没 Docker 时 URL 实测会被后端降级成 TCP，结果落在 TCP 列，高亮别搞错
@@ -2529,9 +2535,21 @@ const Dash = (function () {
     setMode(rows.some((r) => latOf(r.name, "tcp")) || !rows.some((r) => latOf(r.name, "http"))
       ? "tcp" : "http");
 
+    /* 打开弹窗就补测一轮：进页面时只测过「当前分组」那些节点，
+       列表里没勾的（不在本组）还是空的，没法比较着挑。这里把缺的一起补上：
+       只补没测过的、只做 TCP 握手、不写日志，也不动列表顺序。 */
+    const missing = rows.filter((r) => !latOf(r.name, "tcp")).map((r) => r.name);
+    if (missing.length) {
+      cnt.textContent = `补测 ${missing.length} 个…`;
+      autoProbe = runNodeTest(missing, "tcp", null, { silent: true, quiet: true })
+        .then(() => rows.forEach(paintRow))
+        .catch(() => { /* 补测失败就保持原样，不影响选成员 */ })
+        .finally(() => { autoProbe = null; syncCount(); });
+    }
+
     function syncCount() {
-      // 测速过程中计数栏在报进度，别被勾选事件抢回去
-      if (busy) return;
+      // 测速/补测过程中计数栏在报进度，别被勾选事件抢回去
+      if (busy || autoProbe) return;
       cnt.textContent = all.length ? `已选 ${chosen.size} / ${all.length}` : "";
       const any = visibleRows().length > 0;
       [bAll, bInv, bNone].forEach((b) => { b.disabled = !any; });
