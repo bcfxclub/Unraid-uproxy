@@ -277,7 +277,9 @@ def _sb_config(cfg: st.AppCfg) -> dict:
     nodes = [n for n in cfg.outlet.sb_nodes if n.get("outbound")]
     if not nodes:
         raise ValueError("没有可用节点，请先拉取订阅并选择节点")
-    tags = [n["tag"] for n in nodes]
+    # 节点字典只暴露 name/type/server/port/outbound，没有顶层「tag」；
+    # 选择器需要的是出站 tag，与 name 同一值（_dedupe 已保证唯一）。
+    tags = [n["name"] for n in nodes]
     selected = cfg.outlet.sb_node if cfg.outlet.sb_node in tags else tags[0]
     return {
         "log": {"level": "warn"},
