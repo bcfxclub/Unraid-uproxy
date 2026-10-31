@@ -1023,6 +1023,29 @@ function latOf(name, kind) {
   return (kind === "http" ? delayHttp[name] : delayTcp[name]) || null;
 }
 
+/* 同一个地址的两种写法（末尾斜杠 / 大小写）当成同一个 */
+function sameUrl(a, b) {
+  const n = (u) => String(u || "").trim().toLowerCase().replace(/\/+$/, "");
+  return n(a) === n(b);
+}
+
+/* HTTP 延迟必须跟「测的是哪个网址」绑在一起看：换了探测地址，旧数字就不能再充数。
+   url 传空表示不挑地址（节点页这种没有分组上下文的场合，只要测过就给）。 */
+function httpAt(name, url) {
+  const r = delayHttp[name];
+  if (!r) return null;
+  if (!url || !r.url) return r;
+  return sameUrl(r.url, url) ? r : null;
+}
+
+/* 某个分组做 URL 实测时到底访问哪儿：优先齿轮里配的探测地址
+   （sing-box 的 urltest 用的就是它），没配才退到页面当前的测速目标。 */
+function groupProbeUrl(g) {
+  const u = ((g && g.url) || "").trim();
+  if (/^https?:\/\//i.test(u)) return u;
+  return testTarget().url || TEST_TARGETS[0].url;
+}
+
 /* 卡片/菜单里的短格式：TCP 149ms / HTTP 320ms / 超时 / — */
 function latShort(r, kind) {
   const tag = kind === "http" ? "HTTP" : "TCP";
@@ -1123,7 +1146,14 @@ async function runNodeTest(names, mode, url, opts) {
   const res = d.results || [];
   if (!names) {
     // 全量测速：只清本次这一种结果，另一种保留着（两种要同时显示）
-    if (mode === "tcp") { delayMap = {}; delayTcp = {}; } else { delayHttp = {}; }
+    if (mode === "tcp") { delayMap = {}; delayTcp = {}; }
+    else {
+      // 只清「同一个探测地址」的旧结果：别的分组配的是别的网址，那批数字还留着
+      Object.keys(delayHttp).forEach((k) => {
+        const old = delayHttp[k];
+        if (!old || !old.url || sameUrl(old.url, url)) delete delayHttp[k];
+      });
+    }
   }
   res.forEach((r) => {
     delayMap[r.tag] = r;
@@ -1146,7 +1176,7 @@ async function runNodeTest(names, mode, url, opts) {
     toast(!r ? "测速失败"
       : r.reachable ? `${names[0]}：${r.ms}ms（${d.mode === "http" ? "HTTP" : "TCP"}）`
         : `${names[0]}：${r.error || "不可用"}`);
-    return;
+    return d;
   }
   const best = up.length ? Math.min.apply(null, up.map((r) => r.ms)) : null;
   const head = d.mode === "http"
@@ -1154,6 +1184,7 @@ async function runNodeTest(names, mode, url, opts) {
     : (mode === "tcp" ? "TCP 握手" : "本机无 Docker，已降级为 TCP 握手");
   toast(`${head}：可用 ${up.length}/${res.length}` + (best !== null ? `，最快 ${best}ms` : "")
     + (sorted ? (saved ? "，已按延迟重排" : "，排序未保存") : ""));
+  return d;
 }
 
 /* 进页面自动刷一轮 TCP 握手延迟：标签上立刻有数字，不必先点测速。
@@ -1163,6 +1194,34 @@ function autoTcpProbe() {
   const list = groupNodes();
   if (!list.length) return;
   runNodeTest(list.map((n) => n.name), "tcp", null, { silent: true, sort: true }).catch(() => {});
+}
+
+/* 首页两张卡（代理组 / 节点延迟）要显示 HTTP 数：缺的那几台顺手补测一次，
+   不用先去点测速。同一台 + 同一地址 5 分钟内只试一次，免得没 Docker 的环境反复起容器。
+
+   两张卡会分别来要数（当前节点 1 台、延迟卡上 5 台），这里按「探测地址」合并排队，
+   一次测完——以前共用一个定时器，后到的会把先到的取消掉，结果当前节点永远是「…」。 */
+const httpProbeTried = new Map();
+const httpProbeQueue = new Map();     // url -> Set(名字)
+const httpProbeTimers = new Map();    // url -> 定时器
+
+function probeHttpSoon(names, url, delay) {
+  if (!names || !names.length || !url) return;
+  const now = Date.now();
+  const need = names.filter((n) => now - (httpProbeTried.get(`${n}|${url}`) || 0) > 5 * 60 * 1000);
+  if (!need.length) return;
+  need.forEach((n) => httpProbeTried.set(`${n}|${url}`, now));
+  let set = httpProbeQueue.get(url);
+  if (!set) { set = new Set(); httpProbeQueue.set(url, set); }
+  need.forEach((n) => set.add(n));
+  if (httpProbeTimers.has(url)) return;          // 这一批已经在排队了
+  httpProbeTimers.set(url, setTimeout(() => {
+    httpProbeTimers.delete(url);
+    const list = [...(httpProbeQueue.get(url) || [])];
+    httpProbeQueue.delete(url);
+    if (!list.length) return;
+    runNodeTest(list, "http", url, { silent: true, quiet: true }).catch(() => {});
+  }, delay || 400));
 }
 
 async function editCustomTarget() {
@@ -2306,14 +2365,18 @@ const Dash = (function () {
       pd.className = "dpill" + (r ? ` ${delayKind(r)}` : "");
       pd.title = r ? delayTitle(r) : "点「节点延迟」卡片右侧的「测速」跑一轮 TCP 握手";
     }
+    // HTTP 这一格测的就是这个分组的探测网址（齿轮里那个），换了地址旧数字不算数
+    const hUrl = groupProbeUrl(g);
     const ph = $("#dashDelayHttp");
     if (ph) {
-      const r = cur ? latOf(cur, "http") : null;
-      ph.textContent = latShort(r, "http");
+      const r = cur ? httpAt(cur, hUrl) : null;
+      ph.textContent = r ? latShort(r, "http") : (cur ? "HTTP …" : "HTTP —");
       ph.className = "dpill" + (r ? ` ${delayKind(r)}` : "");
       ph.title = r
         ? delayTitle(r)
-        : "还没实测过：在「订阅」页的「目标 ▾」里选一个网址，再点「测速」";
+        : (cur ? `正在经「${cur}」实测 ${shortUrl(hUrl)}（分组探测地址）…`
+          : "当前分组还没有可用节点");
+      if (!r && cur) probeHttpSoon([cur], hUrl, 600);
     }
   }
 
@@ -2451,8 +2514,9 @@ const Dash = (function () {
     // 「自动」到底用哪台：sing-box 跑着就以它报的为准，没跑就退到本组最快
     const pick = liveNow && (g.nodes || []).includes(liveNow)
       ? liveNow : (best ? best.n.name : "");
+    const hUrl = groupProbeUrl(g);      // HTTP 那格测的是这个分组的探测地址
     const pickTcp = pick ? latOf(pick, "tcp") : null;
-    const pickHttp = pick ? latOf(pick, "http") : null;
+    const pickHttp = pick ? httpAt(pick, hUrl) : null;
     const bestBits = pick
       ? [`${liveNow ? "当前走" : "本组最快"} ${pick}`]
       : [];
@@ -2476,7 +2540,7 @@ const Dash = (function () {
     if (list.length) items.push({ sep: true });
     list.forEach((n) => {
       const tcp = latOf(n.name, "tcp");
-      const http = latOf(n.name, "http");
+      const http = httpAt(n.name, hUrl);
       const row = el("div", "nd-row");
       row.appendChild(el("span", "nd-check", n.name === g.node ? "✓" : ""));
       const main = el("div", "nd-main");
@@ -2504,9 +2568,6 @@ const Dash = (function () {
     }
     return items;
   }
-
-  /* 本机能不能做 URL 实测：被后端降级过一次就别再反复试（换页面就重算） */
-  let httpBlocked = false;
 
   /* 分组编辑弹窗：改名 + 勾选成员（支持全选 / 反选 / 清空 / 筛选，不用一个个点） */
   function openGroupEditor(g) {
@@ -2542,8 +2603,10 @@ const Dash = (function () {
     chipTcp.type = chipUrl.type = "button";
     chipTcp.title = "TCP 握手（左列数字）：只连节点端口，快，但只证明端口通。"
       + "打开弹窗会自动测好；点一下＝重测列表里的全部节点（勾没勾都测）";
-    chipUrl.title = `URL 实测（右列数字）：经节点访问 ${shortUrl(probeUrl())} 的真实往返耗时。`
-      + "打开弹窗会自动测好；点一下＝重测列表里的全部节点（勾没勾都测）";
+    // 右列量的就是这个分组的探测地址（齿轮里那个），失败了会临时改成原因
+    const urlTitle = () => `URL 实测（右列数字）：经节点访问 ${probeUrl()} 的真实往返耗时`
+      + "（分组齿轮里的探测地址）。打开弹窗会自动测好；点一下＝重测列表里的全部节点";
+    chipUrl.title = urlTitle();
 
     const bAll = el("button", "linkbtn", "全选");
     const bInv = el("button", "linkbtn", "反选");
@@ -2560,21 +2623,31 @@ const Dash = (function () {
     /* 这个分组「URL 实测」到底访问哪里：优先用齿轮里配的探测地址
        （sing-box 的 urltest 用的就是它），没配就用页面当前的测速目标。 */
     function probeUrl() {
-      const u = ((g && g.url) || "").trim();
-      if (/^https?:\/\//i.test(u)) return u;
-      return testTarget().url || TEST_TARGETS[0].url;
+      return groupProbeUrl(g);
     }
 
-    /* 一格延迟：TCP 握手 / URL 实测各占一列，测过才给数字，没测就是「—」 */
+    // 两列各自「还有一批在测」，用来把空单元格显示成「…」而不是「—」
+    let pendingTcp = false;
+    let pendingHttp = false;
+    let urlHint = "";          // URL 实测没跑成时的原因，挂在空单元格的提示里
+
+    /* 一格延迟：TCP 握手 / URL 实测各占一列，测过才给数字；
+       正在补测就显示「…」，比一个「—」更能说明「等会儿就有」 */
     function paintCell(node, name, mode) {
-      const r = latOf(name, mode);
-      node.classList.toggle("none", !r);
-      node.classList.toggle("ok", !!r && delayKind(r) === "ok");
-      node.classList.toggle("warn", !!r && delayKind(r) === "warn");
-      node.classList.toggle("bad", !!r && delayKind(r) === "bad");
-      node.textContent = r ? msShort(r) : "—";
-      node.title = r ? delayTitle(r)
-        : `${mode === "http" ? "URL 实测" : "TCP 握手"}：还没测过，点这一格就单独测它`;
+      const r = mode === "http" ? httpAt(name, probeUrl()) : latOf(name, "tcp");
+      node.classList.remove("s-none", "s-ok", "s-warn", "s-bad", "s-wait");
+      const label = mode === "http" ? `URL 实测（${shortUrl(probeUrl())}）` : "TCP 握手";
+      if (!r) {
+        const waiting = mode === "http" ? pendingHttp : pendingTcp;
+        node.classList.add(waiting ? "s-wait" : "s-none");
+        node.textContent = waiting ? "…" : "—";
+        node.title = `${label}：` + (waiting ? "正在测…"
+          : (mode === "http" && urlHint ? urlHint : "还没测过，点这一格就单独测它"));
+        return;
+      }
+      node.classList.add("s-" + delayKind(r));
+      node.textContent = msShort(r);
+      node.title = delayTitle(r);
     }
 
     function paintRow(row) {
@@ -2648,26 +2721,39 @@ const Dash = (function () {
       const names = only ? [only.name] : targetRows().map((r) => r.name);
       if (!names.length) { toast("当前筛选下没有节点可测"); return; }
       setBusy(mode, names.length);
+      if (mode === "tcp") pendingTcp = true; else pendingHttp = true;
+      rows.forEach(paintRow);
       try {
         // 补测还在跑就先等它，免得两批结果前后脚回来互相覆盖
         if (autoProbe) await autoProbe.catch(() => {});
-        await runNodeTest(names, mode, mode === "http" ? probeUrl() : null, { sort: !only });
+        const d = await runNodeTest(names, mode, mode === "http" ? probeUrl() : null, { sort: !only });
+        // 后端降级（没 Docker / 上一次还没跑完）时结果落在 TCP 列，别让人以为 URL 列坏了
+        const downgraded = mode === "http" && d && d.mode !== "http";
+        if (downgraded) {
+          urlHint = (d.note || "URL 实测没跑成").replace(/[。；].*$/, "");
+          chipUrl.title = `URL 实测没跑成：${d.note || "未知原因"}`;
+        } else if (mode === "http") {
+          urlHint = "";
+          chipUrl.title = urlTitle();
+        }
         rows.forEach(paintRow);
-        // 没 Docker 时 URL 实测会被后端降级成 TCP，结果落在 TCP 列，高亮别搞错
-        const used = mode === "http" && !names.some((n) => latOf(n, "http")) ? "tcp" : mode;
+        const used = downgraded ? "tcp" : mode;
         setMode(used);
         if (!only) sortRows(used);
       } catch (e) {
         toast(`测速失败：${e.message || e}`);
       } finally {
+        if (mode === "tcp") pendingTcp = false; else pendingHttp = false;
         setBusy(null);
+        rows.forEach(paintRow);
         syncCount();
       }
     }
 
     // 名次：有耗时 → 通但没耗时 → 超时/失败 → 没测过，同档按毫秒升序
     function sortRows(mode) {
-      const key = (r) => latOf(r.name, mode);
+      const url = probeUrl();
+      const key = (r) => (mode === "http" ? httpAt(r.name, url) : latOf(r.name, mode));
       const idx = new Map(rows.map((r, i) => [r.name, i]));
       rows.sort((a, b) => {
         const ra = key(a), rb = key(b);
@@ -2682,39 +2768,76 @@ const Dash = (function () {
     chipTcp.addEventListener("click", () => testHere("tcp"));
     chipUrl.addEventListener("click", () => testHere("http"));
     // 进来先按已有的结果决定高亮哪一列（有 TCP 结果就高亮 TCP）
-    setMode(rows.some((r) => latOf(r.name, "tcp")) || !rows.some((r) => latOf(r.name, "http"))
+    setMode(rows.some((r) => latOf(r.name, "tcp")) || !rows.some((r) => httpAt(r.name, probeUrl()))
       ? "tcp" : "http");
 
-    /* 打开弹窗就把两列都填上：进页面只测过「当前分组」的节点，
-       列表里没勾的（不在本组）还是空的，而且 URL 实测以前还得单独点一次。
-       这里按缺什么补什么：先握手（快，数字先出来），再实测 URL；都不写日志、不动顺序。
-       没有 Docker 的环境 URL 会被后端降级成 TCP，那种情况记下来，本次会话不再重试。 */
-    const missTcp = rows.filter((r) => !latOf(r.name, "tcp")).map((r) => r.name);
-    const missUrl = httpBlocked ? []
-      : rows.filter((r) => !latOf(r.name, "http")).map((r) => r.name);
-    if (missTcp.length || missUrl.length) {
-      autoProbe = (async () => {
-        if (missTcp.length) {
-          cnt.textContent = `补测 TCP ${missTcp.length} 个…`;
-          await runNodeTest(missTcp, "tcp", null, { silent: true, quiet: true });
-          rows.forEach(paintRow);
-        }
-        if (missUrl.length) {
-          cnt.textContent = `补测 URL ${missUrl.length} 个…`;
-          const d = await runNodeTest(missUrl, "http", probeUrl(), { silent: true, quiet: true });
-          rows.forEach(paintRow);
-          // 被降级成 TCP 且原因是没 Docker → 本次会话别再反复试；
-          // 只是「上一次实测还在跑」这种偶发冲突就不记，下次开弹窗再补
-          const note = (d && d.note) || "";
-          if (d && d.mode !== "http" && /docker/i.test(note)) httpBlocked = true;
-        }
-      })().catch(() => { /* 补测失败就保持原样，不影响选成员 */ })
+    /* 打开弹窗就把两列都填上，不用手动点测速：进页面只测过「当前分组」的节点，
+       列表里没勾的（不在本组）还是空的，URL 那一列更是从没测过。
+       先握手（快，数字先出来），再按这个分组的探测地址做 URL 实测；
+       都不写日志、不动列表顺序。
+
+       两种失败分开处理：
+       - 「上一次实测还在跑」这种排队冲突 → 3 秒后自己重试（最多两次），
+         别让用户关掉弹窗重开才发现 URL 列空着；
+       - 环境不支持（没 Docker）→ 本次弹窗不再试，URL 列保持「—」，悬停能看到原因，
+         下次打开再试一次（不永久封死，Docker 修好了就能用）。 */
+    let autoTries = 0;
+    let hintText = "", hintUntil = 0, hintTimer = 0;
+
+    async function fillMissing() {
+      const url = probeUrl();
+      const missTcp = rows.filter((r) => !latOf(r.name, "tcp")).map((r) => r.name);
+      if (missTcp.length) {
+        pendingTcp = true;
+        rows.forEach(paintRow);
+        cnt.textContent = `补测 TCP ${missTcp.length} 个…`;
+        try { await runNodeTest(missTcp, "tcp", null, { silent: true, quiet: true }); } catch (e) { /* 保持原样 */ }
+        pendingTcp = false;
+        rows.forEach(paintRow);
+      }
+      if (!rows.length) return;
+      const missUrl = rows.filter((r) => !httpAt(r.name, url)).map((r) => r.name);
+      if (!missUrl.length) return;
+      pendingHttp = true;
+      rows.forEach(paintRow);
+      cnt.textContent = `补测 URL ${missUrl.length} 个…`;
+      let d = null;
+      try { d = await runNodeTest(missUrl, "http", url, { silent: true, quiet: true }); } catch (e) { d = null; }
+      pendingHttp = false;
+      rows.forEach(paintRow);
+      if (d && d.mode === "http") { urlHint = ""; chipUrl.title = urlTitle(); return; }   // 成了
+      const note = (d && d.note) || "";
+      // 排队冲突（不是「这台机器根本测不了」）：稍后再试，最多两次
+      const queued = /还在进行|稍后|稍候/.test(note);
+      if (queued && autoTries < 2 && document.body.contains(box)) {
+        autoTries += 1;
+        cnt.textContent = "URL 实测排队中，3 秒后重试…";
+        await new Promise((r) => setTimeout(r, 3000));
+        return fillMissing();
+      }
+      urlHint = (note || "URL 实测没跑成").replace(/[。；].*$/, "");
+      chipUrl.title = `URL 实测没跑成：${note || "未知原因"}`;
+      hintText = `URL 列没测成：${urlHint}`;
+      hintUntil = Date.now() + 5000;
+    }
+
+    if (rows.length) {
+      autoProbe = fillMissing()
+        .catch(() => { /* 补测失败就保持原样，不影响选成员 */ })
         .finally(() => { autoProbe = null; syncCount(); });
     }
 
     function syncCount() {
       // 测速/补测过程中计数栏在报进度，别被勾选事件抢回去
       if (busy || autoProbe) return;
+      // 刚失败的原因在计数栏里留几秒（URL 列为什么是空的），过后恢复「已选 n / m」
+      if (Date.now() < hintUntil) {
+        cnt.textContent = hintText;
+        if (!hintTimer) {
+          hintTimer = setTimeout(() => { hintTimer = 0; syncCount(); }, hintUntil - Date.now() + 30);
+        }
+        return;
+      }
       cnt.textContent = all.length ? `已选 ${chosen.size} / ${all.length}` : "";
       const any = visibleRows().length > 0;
       [bAll, bInv, bNone].forEach((b) => { b.disabled = !any; });
@@ -2877,6 +3000,13 @@ const Dash = (function () {
       if (hit) rows = rows.slice(0, 4).concat([hit]);
     }
     const max = Math.max.apply(null, measured.map((n) => keyOf(n).ms)) || 1;
+    const hUrl = groupProbeUrl(g);
+    const foot = $("#dashLatFoot");
+    if (foot) {
+      foot.textContent = `左列 TCP 握手 · 右列经节点实测 ${shortUrl(hUrl)}`;
+      foot.title = `HTTP 那一列量的是「${g.name}」的探测地址 ${hUrl}（齿轮里可改）`;
+    }
+    const missHttp = [];
     rows.forEach(({ n, r }) => {
       const ok = r && r.reachable && r.ms !== null && r.ms !== undefined;
       const row = el("div", "dlrow" + (n.name === curName ? " cur" : ""));
@@ -2891,14 +3021,17 @@ const Dash = (function () {
       bar.appendChild(fill);
       row.appendChild(bar);
       row.appendChild(el("div", "dlms", ok ? `${r.ms}ms` : (r ? "TIMEOUT" : "—")));
-      // 第二列：真经节点访问网址的耗时（没实测过就是 —）
-      const h = latOf(n.name, "http");
+      // 第二列：真经节点访问「分组探测地址」的耗时（没测过就是 —，缺的自动补）
+      const h = httpAt(n.name, hUrl);
       const hm = el("div", "dlms http", h ? msShort(h) : "—");
-      hm.title = h ? delayTitle(h) : "还没实测过：在「订阅」页「目标 ▾」选个网址后点测速";
+      hm.title = h ? delayTitle(h) : `还没经这个节点实测 ${hUrl}，正在补测…`;
+      if (!h) missHttp.push(n.name);
       row.appendChild(hm);
       row.addEventListener("click", () => safe(() => setActiveNode(n), "切换出口"));
       box.appendChild(row);
     });
+    // 卡片上看得见的那几台，HTTP 缺了就顺手补一轮（不用先去点测速）
+    if (missHttp.length) probeHttpSoon(missHttp, hUrl, 1200);
   }
 
   /* ---- 订阅摘要 ---- */

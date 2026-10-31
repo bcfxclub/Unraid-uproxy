@@ -196,7 +196,10 @@ button.ghost { background: transparent; }
 
 .opt, .chk { display: inline-flex; gap: 8px; align-items: center; font-size: 13px; cursor: pointer; }
 .hint { color: var(--muted); font-size: 12px; margin: 6px 0; }
-.warn {
+/* 注意：这里原来叫 .warn，会和「延迟偏高」这种状态类撞名 —— 那些元素一挂上
+   warn 就被撑出 9px/13px 的内边距和 10px 外边距，延迟数字变成大方块、进度条
+   被 padding 撑歪。状态色一律用 .dpill.warn / .ged-ms.warn 这类组合选择器。 */
+.alert-warn {
   background: var(--warn-soft);
   color: var(--warn);
   border-radius: 8px;
@@ -931,15 +934,19 @@ table.data th { color: var(--muted); font-weight: 400; }
 /* 编辑弹窗里每行的延迟：TCP / URL 各占一列，数字本身不再带前缀
    （哪一列是什么由上方 TCP / URL 两个胶囊标明） */
 .ged-ms {
-  font-size: 10.5px; color: var(--muted); font-family: var(--mono);
+  font-size: 11px; color: var(--muted); font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
   text-align: right; white-space: nowrap; overflow: hidden;
   cursor: pointer; opacity: .95;
 }
-.ged-ms.none { opacity: .45; }
-.ged-ms.ok { color: var(--ok); }
-.ged-ms.warn { color: var(--warn); }
-.ged-ms.bad { color: var(--bad); }
+/* 状态色只上颜色，绝不带背景/内边距 —— 否则数字会被撑成大方块 */
+.ged-ms.s-none { opacity: .45; }
+.ged-ms.s-ok { color: var(--ok); }
+.ged-ms.s-warn { color: var(--warn); }
+.ged-ms.s-bad { color: var(--bad); }
 .ged-ms:hover { text-decoration: underline dotted; }
+/* 正在测这一格：三个点脉动，比一个「—」更能说明「等会儿就有」 */
+.ged-ms.s-wait { opacity: .55; animation: ged-pulse 1.1s ease-in-out infinite; }
 
 /* 节点延迟卡片：名称 | 条形 | TCP | HTTP 四列 */
 .dash-card .dlrow { grid-template-columns: minmax(0, 1.45fr) minmax(0, .9fr) 44px 46px; }
