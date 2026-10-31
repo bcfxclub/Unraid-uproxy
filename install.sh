@@ -12,7 +12,9 @@ PORT="${UPX_WEB_PORT:-8765}"
 echo "==> 准备目录"
 mkdir -p "$SRC" "$STATE" "$TPL"
 
-echo "==> 拷贝源码"
+echo "==> 清理并拷贝源码（先清空再拷贝，确保干净重建、移除已删除的旧文件）"
+rm -rf "$SRC"
+mkdir -p "$SRC"
 cp -r "$HERE"/app "$HERE"/web "$HERE"/Dockerfile "$HERE"/requirements.txt "$SRC"/
 cp "$HERE"/fix-mirror.sh "$SRC"/ 2>/dev/null || true
 cp "$HERE"/docker-compose.yml "$SRC"/ 2>/dev/null || true
@@ -39,17 +41,29 @@ if ! docker build -t uproxy:latest "$SRC"; then
   exit 1
 fi
 
-echo "==> 生成登录密码"
-# 优先用显式设置的 UPX_PASSWORD；老部署可能只设了 UPX_TOKEN，继续当密码用。
-if [ -z "${UPX_PASSWORD:-}" ]; then
-  if [ -n "${UPX_TOKEN:-}" ]; then
-    UPX_PASSWORD="$UPX_TOKEN"
-    echo "    沿用已设置的 UPX_TOKEN 作为密码"
-  else
-    UPX_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 24)"
-    echo "    已自动生成密码： $UPX_PASSWORD"
-    echo "    （请记下来，首次登录需要用到）"
-  fi
+echo "==> 处理登录密码"
+PW_FILE="$STATE/.deploy_pw"   # 部署时生成的密码备份，便于重部署保持一致
+if [ -n "${UPX_PASSWORD:-}" ]; then
+  : # 显式指定，优先使用
+elif [ -n "${UPX_TOKEN:-}" ]; then
+  UPX_PASSWORD="$UPX_TOKEN"
+  echo "    沿用已设置的 UPX_TOKEN 作为密码"
+elif [ -f "$STATE/auth.json" ]; then
+  # 已在界面改过密码：auth.json 优先级最高，env 传空也不影响，跳过生成避免误导
+  echo "    检测到已设置的密码（auth.json），重部署沿用，不重新生成"
+  UPX_PASSWORD=""
+elif [ -f "$PW_FILE" ]; then
+  UPX_PASSWORD="$(cat "$PW_FILE")"
+  echo "    沿用上次部署生成的密码（重部署保持一致）"
+else
+  UPX_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 24)"
+  echo "    已自动生成密码： $UPX_PASSWORD"
+  echo "    （请记下来，首次登录需要用到）"
+fi
+# 备份本次实际使用的密码（仅当为非空明文时），供下次重部署复用，避免密码被重置
+if [ -n "$UPX_PASSWORD" ]; then
+  printf '%s' "$UPX_PASSWORD" > "$PW_FILE"
+  chmod 600 "$PW_FILE"
 fi
 # 同时把密码作为旧式直连口令下发，老书签 ?token= 仍能继续使用。
 UPX_TOKEN="$UPX_PASSWORD"
