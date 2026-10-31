@@ -35,17 +35,71 @@ def _b64(s: str) -> str:
             return ""
 
 
-def fetch(url: str, ua: str = "clash.meta", timeout: int = 20, proxy: str = "") -> dict:
-    argv = ["curl", "-sS", "--max-time", str(timeout), "-A", ua or "clash.meta"]
-    if proxy:
-        argv += ["-x", proxy]
-    argv.append(url)
-    r = host.run(argv, timeout=timeout + 5)
-    if r["rc"] != 0:
-        return {"ok": False, "message": (r["err"] or "抓取失败")[:400], "raw": ""}
-    if not r["out"]:
-        return {"ok": False, "message": "订阅返回为空", "raw": ""}
-    return {"ok": True, "message": "ok", "raw": r["out"]}
+FETCH_MARK = "__UPXCODE__"
+
+
+def _classify(err: str) -> str:
+    """把 curl 的原始报错翻译成用户能看懂、能下手排查的原因。"""
+    e = (err or "").lower()
+    if "could not resolve host" in e or "name or service not known" in e or "resolve" in e:
+        return ("DNS 解析失败：容器解析不到该域名。\n"
+                "排查：在宿主机执行 `docker exec uproxy getent hosts uuu-eyi.pages.dev`；\n"
+                "或改用下面的「通过代理拉取」走已有出口（WARP / 手动节点）。")
+    if "connection timed out" in e or "operation timed out" in e or "timeout" in e:
+        return ("连接超时：订阅服务器响应慢或网络不通。\n"
+                "已自动重试多次仍失败；建议稍后重试，或用「通过代理拉取」走 WARP / 已有节点。")
+    if "failed to connect" in e or "connection refused" in e:
+        return "连接被拒绝：服务器不在线或端口不对（检查订阅地址是否完整）。"
+    if "ssl" in e or "certificate" in e or "handshake" in e:
+        return "TLS 握手失败：可能被中间人拦截或证书异常。"
+    if "operation not permitted" in e:
+        return "权限受限：容器网络被限制（检查 Unraid 防火墙 / 容器网络模式）。"
+    if "redirect" in e:
+        return "重定向异常：订阅地址被跳转，请确认完整链接。"
+    return f"抓取失败：{err[:300]}"
+
+
+def fetch(url: str, ua: str = "clash.meta", timeout: int = 30, proxy: str = "",
+          retries: int = 3) -> dict:
+    """拉取订阅内容。对不稳定的订阅源做多次重试，并区分失败原因。
+
+    返回 {ok, message, raw, http_code, attempt}。
+    """
+    if not url:
+        return {"ok": False, "message": "订阅地址为空", "raw": "", "http_code": "", "attempt": 0}
+
+    base = [
+        "curl", "-sSL", "--http1.1",
+        "--connect-timeout", "10",
+        "--max-time", str(timeout),
+        "-A", ua or "clash.meta",
+        "-w", f"\n{FETCH_MARK}%{{http_code}}",
+    ]
+    last = {"err": "未知错误", "code": ""}
+    for attempt in range(1, retries + 1):
+        argv = list(base)
+        if proxy:
+            argv += ["-x", proxy]
+        argv.append(url)
+        r = host.run(argv, timeout=timeout + 15)
+        out = r["out"] or ""
+        code = ""
+        body = out
+        if FETCH_MARK in out:
+            body, code = out.rsplit(FETCH_MARK, 1)
+            code = code.strip()
+        body = body.strip()
+        if r["rc"] == 0 and body:
+            if code and not code.startswith("2"):
+                # 4xx 一般重试无意义（地址错 / 需鉴权），直接返回；5xx 才重试
+                if code.startswith("4"):
+                    return {"ok": False, "message": f"订阅返回 HTTP {code}（地址错误或需要鉴权）",
+                            "raw": "", "http_code": code, "attempt": attempt}
+                last = {"err": f"HTTP {code}", "code": code}
+                continue
+            return {"ok": True, "message": "ok", "raw": body, "http_code": code or "200", "attempt": attempt}
+        last = {"err": (r["err"] or "抓取失败"), "code": code}
+    return {"ok": False, "message": _classify(last["err"]), "raw": "", "http_code": last["code"], "attempt": retries}
 
 
 # --------------------------------------------------------------------------
@@ -374,10 +428,18 @@ def parse(text: str) -> dict:
         else:
             unsupported.append(scheme)
 
+    msg = f"解析 {len(nodes)} 个节点" + (f"，跳过不支持：{','.join(sorted(set(unsupported)))}" if unsupported else "")
+    # 内容里没有任何已知节点协议标记 -> 多半是网页/错误页/错误地址
+    if not nodes:
+        looks_like_sub = any(
+            s in raw for s in ("vmess://", "vless://", "trojan://", "ss://",
+                               "socks://", "hysteria2://", "hy2://", "proxies:"))
+        if not looks_like_sub:
+            msg = "订阅内容不是节点配置（看起来像网页或错误页）。请确认订阅地址是否完整/正确。"
     return {
         "nodes": _dedupe(nodes),
         "unsupported": sorted(set(unsupported)),
-        "message": f"解析 {len(nodes)} 个节点" + (f"，跳过不支持：{','.join(sorted(set(unsupported)))}" if unsupported else ""),
+        "message": msg,
     }
 
 

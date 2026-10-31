@@ -251,12 +251,14 @@ def api_singbox(req: OutletReq):
 # --------------------------------------------------------------------------
 @app.post("/api/subs/fetch", dependencies=[Depends(guard)])
 def api_subs_fetch(req: SubReq):
+    got: dict = {"attempt": 1, "http_code": ""}
     if req.raw.strip():
         parsed = subs.parse(req.raw)
     elif req.url.strip():
         got = subs.fetch(req.url.strip(), req.ua or "clash.meta", proxy=req.proxy or "")
         if not got["ok"]:
-            return {"ok": False, "message": got["message"]}
+            return {"ok": False, "message": got["message"], "http_code": got.get("http_code", ""),
+                    "attempt": got.get("attempt", 0)}
         parsed = subs.parse(got["raw"])
     else:
         return {"ok": False, "message": "请填写订阅地址或粘贴订阅内容"}
@@ -266,10 +268,11 @@ def api_subs_fetch(req: SubReq):
     if req.url.strip():
         cfg.outlet.sub_url = req.url.strip()
     st.save(cfg)
-    return {"ok": True, "message": parsed["message"], "nodes": [
+    retry_note = f"（第 {got['attempt']} 次拉取成功）" if got.get("attempt", 1) > 1 else ""
+    return {"ok": True, "message": parsed["message"] + retry_note, "nodes": [
         {"name": n["name"], "type": n["type"], "server": n["server"], "port": n["port"]}
         for n in parsed["nodes"]
-    ], "unsupported": parsed["unsupported"]}
+    ], "unsupported": parsed["unsupported"], "attempt": got.get("attempt", 1)}
 
 
 @app.post("/api/subs/test", dependencies=[Depends(guard)])

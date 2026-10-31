@@ -375,6 +375,7 @@ $("#btnSubFetch").addEventListener("click", () => safe(async () => {
   const d = await api("/api/subs/fetch", "POST", {
     url: $("#inSubUrl").value.trim(),
     ua: $("#inSubUa").value.trim() || "clash.meta",
+    proxy: $("#inSubProxy").value.trim(),
     raw: $("#inSubRaw").value,
   });
   clear(out);
