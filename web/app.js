@@ -401,6 +401,43 @@ function renderProbe(p) {
   setRunBadge(anyPath || p.docker_version, anyPath ? "已接入宿主机" : "未识别宿主机");
 }
 
+/* 出口页的节点下拉：把每个节点的测速延迟也写进选项文字，
+   让下拉框像订阅页一样「体现测速」。延迟来自全局 delayTcp / delayHttp。
+   第一项「自动（延迟最低）」对应空值——sing-box 用 urltest 自己挑最快的。 */
+function renderOutletNodeSelect(cfg) {
+  const sel = $("#selNode");
+  if (!sel) return;
+  const c = cfg || (STATE && STATE.config) || {};
+  const nodes = (c.outlet && c.outlet.sb_nodes) || [];
+  const prev = sel.value || (c.outlet && c.outlet.sb_node) || "";
+  clear(sel);
+
+  const auto = el("option", "", "自动（延迟最低）");
+  auto.value = "";
+  sel.appendChild(auto);
+
+  nodes.forEach((n) => {
+    const t = latOf(n.name, "tcp");
+    const h = latOf(n.name, "http");
+    let lat = "";
+    if (t) {
+      if (t.degraded) lat = " · HTTP不可用";
+      else if (t.reachable) lat += ` · TCP ${t.ms != null ? t.ms + "ms" : "OK"}`;
+      else lat += " · TCP超时";
+    }
+    if (h && !h.degraded) {
+      lat += h.reachable ? ` · HTTP ${h.ms != null ? h.ms + "ms" : "OK"}` : " · HTTP超时";
+    }
+    const o = el("option", "", `${n.name} · ${n.type}${lat}`);
+    o.value = n.name;
+    sel.appendChild(o);
+  });
+
+  // 选回原来的项（没测到延迟时也要保留用户选择）
+  if (nodes.some((n) => n.name === prev)) sel.value = prev;
+  else sel.value = "";
+}
+
 function renderConfig(c) {
   const mode = c.outlet.mode;
   $$('input[name="mode"]').forEach((r) => { r.checked = r.value === mode; });
@@ -423,14 +460,7 @@ function renderConfig(c) {
   $("#emhttpProxy").checked = !!c.emhttp_proxy;
 
   // 出口页的下拉（保留）
-  const sel = $("#selNode");
-  clear(sel);
-  (c.outlet.sb_nodes || []).forEach((n) => {
-    const o = el("option", "", `${n.name} · ${n.type}`);
-    o.value = n.name;
-    sel.appendChild(o);
-  });
-  if (c.outlet.sb_node) sel.value = c.outlet.sb_node;
+  renderOutletNodeSelect(c);
 
   // 订阅源列表 + 节点管理 + 分流规则
   renderSubList(c.outlet.subscriptions || []);
@@ -1410,6 +1440,7 @@ async function runNodeTest(names, mode, url, opts) {
   let sorted = false, saved = false;
   if ((!names || opt.sort) && res.length && testSortOn()) sorted = sortNodesByDelay();
   renderNodes();
+  renderOutletNodeSelect();   // 出口下拉框跟着刷新延迟
   Dash.onNodes();          // 首页「代理组 / 节点延迟」两张卡跟着刷新
   if (sorted) saved = await saveNodeOrder();
   // 返回原始响应：静默补测要靠 d.mode / d.note 判断是不是被降级了
