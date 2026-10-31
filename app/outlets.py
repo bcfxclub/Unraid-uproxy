@@ -11,6 +11,7 @@ import re
 import shutil
 import socket
 
+from . import groups
 from . import host
 from . import route
 from . import settings as S
@@ -315,15 +316,18 @@ def _sb_config(cfg: st.AppCfg, version: tuple[int, int] | None = None,
     new_dns = ver >= (1, 12)     # 旧 DNS 服务器写法在 1.14 被删，1.12 起用 type+server
     new_tun = ver >= (1, 10)     # tun 的 inet4_address 并入 address
 
-    disabled = set(cfg.outlet.sb_disabled or [])
-    nodes = [n for n in cfg.outlet.sb_nodes
-             if n.get("outbound") and n.get("name") not in disabled]
+    groups.ensure(cfg)
+    nodes = groups.enabled_nodes(cfg)
     if not nodes:
         raise ValueError("没有可用节点，请先拉取订阅并选择节点（或启用被停用的节点）")
     # 节点字典只暴露 name/type/server/port/outbound，没有顶层「tag」；
     # 选择器需要的是出站 tag，与 name 同一值（_dedupe 已保证唯一）。
     tags = [n["name"] for n in nodes]
-    selected = cfg.outlet.sb_node if cfg.outlet.sb_node in tags else tags[0]
+    # 出口只用「当前分组」里的节点：分组是用户划出来的可用集合
+    grp = groups.active(cfg)
+    members = set(grp["nodes"] or [])
+    gtags = [t for t in tags if t in members] or tags
+    selected = grp["node"] if grp["node"] in gtags else ""
 
     inbounds = [{
         "type": "mixed",
@@ -357,8 +361,17 @@ def _sb_config(cfg: st.AppCfg, version: tuple[int, int] | None = None,
                      "final": "223.5.5.5"}
 
     built = route.build(cfg, modern=modern, select_tag=select_tag)
+    if selected:
+        group_out: dict = {"type": "selector", "tag": select_tag,
+                           "outbounds": gtags, "default": selected}
+    else:
+        # 分组没指定节点 = 「自动（延迟最低）」：交给 urltest 真去挑最快的那台，
+        # 而不是在这里假装有个自动。sing-box 会按 url 定期重测。
+        group_out = {"type": "urltest", "tag": select_tag, "outbounds": gtags,
+                     "url": "https://www.gstatic.com/generate_204",
+                     "interval": "3m", "tolerance": 50}
     outbounds = [
-        {"type": "selector", "tag": select_tag, "outbounds": tags, "default": selected},
+        group_out,
         *[n["outbound"] for n in nodes],
         {"type": "direct", "tag": "direct"},
     ]
@@ -474,7 +487,8 @@ def sb_start(cfg: st.AppCfg) -> dict:
         return {"ok": False, "message": (r["err"] or r["out"] or "启动失败")[:800]}
     return {"ok": True, "message": "sing-box 出口已启动",
             "endpoint": f"http://{SB_NAME}:{cfg.outlet.sb_port}",
-            "selected": cfg.outlet.sb_node or "自动"}
+            "group": groups.active(cfg)["name"],
+            "selected": groups.active(cfg)["node"] or "自动（延迟最低）"}
 
 
 def sb_stop() -> dict:

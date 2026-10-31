@@ -150,11 +150,17 @@ const Pop = (function () {
   }
   function onKey(e) { if (e.key === "Escape") close(); }
 
-  function open(anchor, items) {
+  /* items 每项：
+       {sep:true}                       分隔线
+       {node: 元素}                     自定义内容（行内按钮自己控制是否关闭）
+       {label, danger, disabled, onClick} 普通按钮                              */
+  function open(anchor, items, opts) {
     close();
-    const m = el("div", "pop");
+    const o = opts || {};
+    const m = el("div", "pop" + (o.cls ? ` ${o.cls}` : ""));
     items.forEach((it) => {
       if (it.sep) { m.appendChild(el("div", "pop-sep")); return; }
+      if (it.node) { m.appendChild(it.node); return; }
       const b = el("button", it.danger ? "danger" : "", it.label);
       if (it.disabled) b.disabled = true;
       b.addEventListener("click", () => { close(); if (it.onClick) it.onClick(); });
@@ -177,9 +183,9 @@ const Pop = (function () {
     }, 0);
   }
 
-  function toggle(anchor, items) {
+  function toggle(anchor, items, opts) {
     if (cur && curAnchor === anchor) { close(); return; }
-    open(anchor, items);
+    open(anchor, items, opts);
   }
   return { open, toggle, close };
 })();
@@ -949,8 +955,9 @@ async function runNodeTest(names, mode, url, opts) {
   res.forEach((r) => { delayMap[r.tag] = r; });
 
   // 全部测速完成 → 按延迟重排并落盘；单节点测速不动顺序，免得卡片乱跳
+  // （首页测「当前分组」时传 opts.sort，顺序照样跟着最新结果走）
   let sorted = false, saved = false;
-  if (!names && res.length && testSortOn()) sorted = sortNodesByDelay();
+  if ((!names || opt.sort) && res.length && testSortOn()) sorted = sortNodesByDelay();
   renderNodes();
   Dash.onNodes();          // 首页「代理组 / 节点延迟」两张卡跟着刷新
   if (sorted) saved = await saveNodeOrder();
@@ -973,12 +980,12 @@ async function runNodeTest(names, mode, url, opts) {
 }
 
 /* 进页面自动刷一轮 TCP 握手延迟：标签上立刻有数字，不必先点测速。
-   不管保存的测速目标是哪个，进来先用 TCP 探一遍（快、不起容器）；
-   和手动测速一样按延迟重排并保存 —— 顺序永远反映最近一次测速结果。 */
+   只测「当前代理组」——首页「节点延迟」卡片展示的就是这一组；
+   和手动测速一样按延迟重排并保存，顺序永远反映最近一次结果。 */
 function autoTcpProbe() {
-  const nodes = STATE?.config?.outlet?.sb_nodes || [];
-  if (!nodes.length) return;
-  runNodeTest(null, "tcp", null, { silent: true }).catch(() => {});
+  const list = groupNodes();
+  if (!list.length) return;
+  runNodeTest(list.map((n) => n.name), "tcp", null, { silent: true, sort: true }).catch(() => {});
 }
 
 async function editCustomTarget() {
@@ -1906,6 +1913,50 @@ async function boot() {
 /* ---------------- 首页仪表板 ----------------
    把「能不能用」的关键信息摆到一屏：出口活着没、现在是哪个节点、走什么分流、
    哪个节点最快、订阅还新不新。所有控件都直接对接真实接口，不做假动作。 */
+const GEAR_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+  + 'stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/>'
+  + '<path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 '
+  + '1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8 '
+  + 'l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.9 '
+  + 'l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 '
+  + '1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1 '
+  + 'a1.7 1.7 0 00-1.5 1z"/></svg>';
+
+/* ---------------- 代理分组（仪表板「代理组」卡片用） ----------------
+   后端 sb_groups = [{name, nodes:[节点名], node:选中的节点}]，只有「当前分组」
+   参与出口。node 为空 = 自动（延迟最低），此时 sing-box 用 urltest 自己挑。 */
+function groupList() { return (STATE?.config?.outlet?.sb_groups) || []; }
+
+function activeGroup() {
+  const gs = groupList();
+  const cur = STATE?.config?.outlet?.sb_group;
+  return gs.find((g) => g.name === cur) || gs[0] || { name: "PROXY", nodes: [], node: "" };
+}
+
+/* 现在真正可用的节点（有出站、没被停用） */
+function aliveNodes() {
+  const o = STATE?.config?.outlet || {};
+  const dis = new Set(o.sb_disabled || []);
+  return (o.sb_nodes || []).filter((n) => n.outbound && !dis.has(n.name));
+}
+
+/* 当前分组里的节点，顺序沿用 sb_nodes（跟着测速排序走） */
+function groupNodes() {
+  const names = new Set(activeGroup().nodes || []);
+  return aliveNodes().filter((n) => names.has(n.name));
+}
+
+/* 分组里延迟最低的那个（已测过的才算） */
+function groupBest() {
+  let best = null;
+  groupNodes().forEach((n) => {
+    const r = delayMap[n.name];
+    if (!r || !r.reachable || r.ms === null || r.ms === undefined) return;
+    if (!best || r.ms < best.r.ms) best = { n, r };
+  });
+  return best;
+}
+
 const Dash = (function () {
   let last = null;   // 最近一次 /api/outlet/stats
 
@@ -1914,9 +1965,7 @@ const Dash = (function () {
   };
 
   function nodesAlive() {
-    const o = STATE?.config?.outlet || {};
-    const dis = new Set(o.sb_disabled || []);
-    return (o.sb_nodes || []).filter((n) => n.outbound && !dis.has(n.name));
+    return aliveNodes();
   }
 
   function gotoTab(name, focus) {
@@ -1948,9 +1997,9 @@ const Dash = (function () {
       return;
     }
 
-    const alive = nodesAlive().length;
+    const g = activeGroup();
     const detail = mode === "singbox"
-      ? `sing-box · 端口 ${o.sb_port || 7890} · 可用节点 ${alive}`
+      ? `sing-box · 端口 ${o.sb_port || 7890} · ${g.name}（${(g.nodes || []).length} 个节点）`
       : `WARP · 端口 ${o.warp_port || 9091}`;
     if (running) {
       dot.classList.add("ok");
@@ -1980,12 +2029,10 @@ const Dash = (function () {
     const running = !!(last && last.running);
     const act = running ? "stop" : "start";
     if (o.mode === "none" || o.mode === "manual") { toast("先在下面选一个出口方式"); return; }
-    // 首次启动还没指定节点时，替他选第一个可用节点，别让后端报「请先选节点」
-    if (o.mode === "singbox" && !running && !o.sb_node) {
-      const list = nodesAlive();
-      if (!list.length) { toast("还没有可用节点，先去「订阅」页添加订阅"); return; }
-      await api("/api/nodes", "POST", { node: list[0].name });
-      await loadState();
+    // 分组没固定节点也没关系（自动 = urltest 挑最快的），但整组为空就起不来
+    if (o.mode === "singbox" && !running && !groupNodes().length) {
+      toast("当前分组没有可用节点，去「订阅」页添加订阅或调整分组");
+      return;
     }
     if (o.mode === "singbox") await sb(act);
     else await warp(act);
@@ -1995,63 +2042,378 @@ const Dash = (function () {
     setTimeout(refreshStats, 1800);
   }
 
-  /* ---- 代理组（当前节点 + 延迟） ---- */
-  function renderProxy() {
-    const o = STATE?.config?.outlet || {};
-    const sel = $("#dashNode");
-    if (!sel) return;
-    const list = nodesAlive();
-    clear(sel);
-    const auto = el("option", "", list.length ? "（未固定，按规则/排序自动）" : "（还没有可用节点）");
-    auto.value = "";
-    sel.appendChild(auto);
-    list.forEach((n) => {
-      const op = el("option", "", n.name);
-      op.value = n.name;
-      sel.appendChild(op);
-    });
-    sel.value = o.sb_node && list.some((n) => n.name === o.sb_node) ? o.sb_node : "";
+  /* ---- 代理组：分组胶囊 + 节点胶囊（照 v2rayA 的做法：选组 → 选节点） ---- */
+  function renderGroup() {
+    const g = activeGroup();
+    const pinned = !!g.node;
 
-    const d = o.sb_node ? delayMap[o.sb_node] : null;
+    const gn = $("#dashGroupName");
+    if (gn) gn.textContent = g.name;
+    const gc = $("#dashGroupCount");
+    if (gc) gc.textContent = `${(g.nodes || []).length} 个节点`;
+    const lg = $("#dashLatGroup");
+    if (lg) lg.textContent = g.name;
+
+    const nn = $("#dashNodeName");
+    if (nn) nn.textContent = pinned ? g.node : "自动（延迟最低）";
+    const btn = $("#btnDashNode");
+    if (btn) {
+      btn.title = pinned
+        ? `当前固定「${g.node}」，点这里换节点或改回自动`
+        : "自动挑本组延迟最低的节点，点这里手动指定";
+    }
+
+    const node = pinned ? groupNodes().find((n) => n.name === g.node) : null;
+    const meta = $("#dashNodeMeta");
+    if (meta) {
+      meta.textContent = pinned
+        ? (node ? (node.type || "节点") : "已不在本组")
+        : `本组 ${(g.nodes || []).length} 个节点 · 自动`;
+      meta.title = node ? `${node.server}:${node.port}` : "";
+    }
+
+    const best = groupBest();
+    const d = pinned ? delayMap[g.node] : (best && best.r);
     const pd = $("#dashDelay");
     if (pd) {
       pd.textContent = d ? delayText(d) : "未测速";
       pd.className = "dpill" + (d ? ` ${delayKind(d)}` : "");
       pd.title = d ? delayTitle(d) : "点「节点延迟」卡片里的测速按钮";
     }
-    const pin = $("#dashPin");
-    if (pin) pin.hidden = !o.sb_node;
-    const unpin = $("#btnDashUnpin");
-    if (unpin) unpin.hidden = !o.sb_node;
   }
 
-  /* ---- 节点延迟 Top 3 ---- */
+  /* 分组菜单：✓ 当前分组 / 齿轮改名和选节点 / 垃圾桶删除 / + 创建 */
+  function groupMenu() {
+    const cur = activeGroup().name;
+    const items = [{ node: el("div", "pop-head", "代理分组") }];
+    groupList().forEach((g) => {
+      const on = g.name === cur;
+      const row = el("div", "pg-row" + (on ? " on" : ""));
+      row.appendChild(el("span", "pg-check", on ? "✓" : ""));
+      row.appendChild(el("span", "pg-name", g.name));
+
+      const gear = el("button", "pg-ico");
+      gear.type = "button";
+      gear.title = "编辑分组（改名 / 选节点）";
+      gear.innerHTML = GEAR_SVG;
+      gear.addEventListener("click", (e) => {
+        e.stopPropagation();
+        Pop.close();
+        safe(() => openGroupEditor(g), "编辑分组");
+      });
+      row.appendChild(gear);
+
+      if (groupList().length > 1) {
+        const del = el("button", "pg-ico del");
+        del.type = "button";
+        del.title = `删除分组「${g.name}」`;
+        del.innerHTML = TRASH_SVG;
+        del.addEventListener("click", (e) => {
+          e.stopPropagation();
+          Pop.close();
+          safe(() => delGroup(g), "删除分组");
+        });
+        row.appendChild(del);
+      }
+
+      row.addEventListener("click", () => {
+        Pop.close();
+        if (!on) safe(() => switchGroup(g.name), "切换分组");
+      });
+      items.push({ node: row });
+    });
+    items.push({ sep: true });
+    const add = el("div", "pop-new");
+    add.appendChild(el("span", "pg-check", "＋"));
+    add.appendChild(el("span", "pg-name", "创建"));
+    add.addEventListener("click", () => {
+      Pop.close();
+      safe(() => openGroupEditor(null), "新建分组");
+    });
+    items.push({ node: add });
+    return items;
+  }
+
+  /* 节点菜单：自动（延迟最低）在最前，下面是本组节点（协议 + 延迟） */
+  function nodeMenu() {
+    const g = activeGroup();
+    const items = [{ node: el("div", "pop-head", `${g.name} · ${(g.nodes || []).length} 个节点`) }];
+
+    const auto = el("div", "nd-row");
+    auto.appendChild(el("span", "nd-check", g.node ? "" : "✓"));
+    const am = el("div", "nd-main");
+    am.appendChild(el("div", "nd-name", "自动（延迟最低）"));
+    const best = groupBest();
+    am.appendChild(el("div", "nd-meta", best
+      ? `本组最快 ${best.n.name} · ${best.r.ms}ms`
+      : "按延迟自动挑本组最快的节点"));
+    auto.appendChild(am);
+    auto.addEventListener("click", () => {
+      Pop.close();
+      safe(() => selectNode(""), "自动选择");
+    });
+    items.push({ node: auto });
+
+    const list = groupNodes();
+    if (list.length) items.push({ sep: true });
+    list.forEach((n) => {
+      const r = delayMap[n.name];
+      const row = el("div", "nd-row");
+      row.appendChild(el("span", "nd-check", n.name === g.node ? "✓" : ""));
+      const main = el("div", "nd-main");
+      main.appendChild(el("div", "nd-name", n.name));
+      const bits = [n.type || ""];
+      if (r) bits.push(delayText(r).replace(/^(TCP|HTTP) /, ""));
+      main.appendChild(el("div", "nd-meta", bits.filter(Boolean).join(" · ")));
+      row.appendChild(main);
+      row.addEventListener("click", () => {
+        Pop.close();
+        safe(() => selectNode(n.name), "切换节点");
+      });
+      items.push({ node: row });
+    });
+    if (!list.length) {
+      items.push({ node: el("div", "nd-meta", "这个分组还没有节点，点下面「编辑分组」勾进来。") });
+    }
+    return items;
+  }
+
+  /* 分组编辑弹窗：改名 + 勾选成员（支持全选 / 反选 / 清空 / 筛选，不用一个个点） */
+  function openGroupEditor(g) {
+    const isNew = !g;
+    const mask = el("div", "modal-mask");
+    const box = el("div", "modal geditor");
+    box.appendChild(el("h3", "", isNew ? "新建代理分组" : `编辑分组「${g.name}」`));
+    box.appendChild(el("p", "modal-note", isNew
+      ? "分组只是把节点分堆，出口只用「当前分组」的节点。默认全勾上，按需取消。"
+      : "取消勾选即把节点移出本组（节点本身不会被删除）；改名字后点保存即生效。"));
+
+    box.appendChild(el("label", "modal-lbl", "分组名称"));
+    const inp = el("input", "modal-input");
+    inp.value = isNew ? "" : g.name;
+    inp.placeholder = "例如 CLOUDFLARE / 香港 / 备用";
+    inp.maxLength = 20;
+    box.appendChild(inp);
+
+    box.appendChild(el("label", "modal-lbl", "包含的节点"));
+    const all = nodesAlive();
+    const chosen = new Set(isNew ? all.map((n) => n.name) : (g.nodes || []));
+
+    // 工具栏：筛选 + 已选计数 + 批量操作（都只作用于当前筛选结果）
+    const bar = el("div", "ged-bar");
+    const filter = el("input", "ged-filter");
+    filter.type = "search";
+    filter.placeholder = "筛选节点（名字 / 协议）";
+    const cnt = el("span", "ged-count", "");
+    const bAll = el("button", "linkbtn", "全选");
+    const bInv = el("button", "linkbtn", "反选");
+    const bNone = el("button", "linkbtn", "清空");
+    bAll.title = "勾上当前筛选结果里的全部节点";
+    bInv.title = "筛选结果里已勾的取消、没勾的勾上";
+    bNone.title = "把筛选结果里的节点全部移出本组";
+    const bOnly = el("button", "linkbtn", "仅留");
+    bOnly.title = "只保留筛选结果里的节点，其余移出本组（先在左边筛一下）";
+    bAll.type = bInv.type = bNone.type = bOnly.type = "button";
+    bar.append(filter, cnt, bAll, bInv, bNone, bOnly);
+    box.appendChild(bar);
+
+    const list = el("div", "ged-list");
+    const rows = [];
+    all.forEach((n) => {
+      const lab = el("label", "ged-item");
+      const cb = el("input");
+      cb.type = "checkbox";
+      cb.checked = chosen.has(n.name);
+      cb.addEventListener("change", () => {
+        if (cb.checked) chosen.add(n.name); else chosen.delete(n.name);
+        syncCount();
+      });
+      lab.appendChild(cb);
+      lab.appendChild(el("span", "ged-name", n.name));
+      lab.appendChild(el("span", "ged-type", n.type || ""));
+      lab.setAttribute("data-q", `${n.name} ${n.type || ""}`.toLowerCase());
+      list.appendChild(lab);
+      rows.push({ lab, cb, name: n.name });
+    });
+    if (!all.length) list.appendChild(el("div", "muted", "还没有可用节点，先去「订阅」页添加订阅。"));
+    box.appendChild(list);
+
+    const visibleRows = () => rows.filter((r) => !r.lab.hidden);
+
+    function syncCount() {
+      cnt.textContent = all.length ? `已选 ${chosen.size} / ${all.length}` : "";
+      const any = visibleRows().length > 0;
+      [bAll, bInv, bNone].forEach((b) => { b.disabled = !any; });
+      bOnly.disabled = !any || !filter.value.trim();
+    }
+
+    function applyFilter() {
+      const q = filter.value.trim().toLowerCase();
+      rows.forEach((r) => {
+        r.lab.hidden = !!q && !(r.lab.getAttribute("data-q") || "").includes(q);
+      });
+      syncCount();
+    }
+    filter.addEventListener("input", applyFilter);
+
+    bAll.addEventListener("click", () => {
+      visibleRows().forEach((r) => { r.cb.checked = true; chosen.add(r.name); });
+      syncCount();
+    });
+    bInv.addEventListener("click", () => {
+      visibleRows().forEach((r) => {
+        r.cb.checked = !r.cb.checked;
+        if (r.cb.checked) chosen.add(r.name); else chosen.delete(r.name);
+      });
+      syncCount();
+    });
+    bNone.addEventListener("click", () => {
+      visibleRows().forEach((r) => { r.cb.checked = false; chosen.delete(r.name); });
+      syncCount();
+    });
+
+    // 「仅留」：先筛出要保留的，再一键把其余全部移出，省得一个个取消
+    bOnly.addEventListener("click", () => {
+      const keep = new Set(visibleRows().map((r) => r.name));
+      chosen.clear();
+      rows.forEach((r) => {
+        const on = keep.has(r.name);
+        r.cb.checked = on;
+        if (on) chosen.add(r.name);
+      });
+      syncCount();
+    });
+
+    const row = el("div", "modal-btns");
+    const cancel = el("button", "", "取消");
+    const del = el("button", "danger", "删除分组");
+    const ok = el("button", "primary", isNew ? "创建" : "保存");
+    del.hidden = isNew || groupList().length <= 1;
+    cancel.addEventListener("click", () => mask.remove());
+    del.addEventListener("click", () => {
+      mask.remove();
+      safe(() => delGroup(g), "删除分组");
+    });
+    ok.addEventListener("click", () => safe(async () => {
+      const name = inp.value.trim();
+      if (!name) { toast("先给分组起个名字"); inp.focus(); return; }
+      const nodes = Array.from(chosen);
+      ok.disabled = true;
+      try {
+        if (isNew) {
+          const d = await api("/api/groups", "POST", { create: { name, nodes } });
+          if (d.ok === false) { toast(d.message || "创建失败"); return; }
+          mask.remove();
+          toast(d.message + (d.need_restart ? "，重启 sing-box 后生效" : ""));
+        } else {
+          if (name !== g.name) {
+            const r = await api("/api/groups", "POST", { rename: { from: g.name, to: name } });
+            if (r.ok === false) { toast(r.message || "改名失败"); return; }
+          }
+          const keep = g.node && nodes.includes(g.node) ? g.node : "";
+          const d = await api("/api/groups", "POST", { update: { name, nodes, node: keep } });
+          if (d.ok === false) { toast(d.message || "保存失败"); return; }
+          mask.remove();
+          toast(d.message + (d.need_restart ? "，重启 sing-box 后生效" : ""));
+        }
+        await loadState();
+        probeGroup();
+      } finally { ok.disabled = false; }
+    }, "保存分组"));
+    row.append(cancel, del, ok);
+    box.appendChild(row);
+
+    mask.appendChild(box);
+    mask.addEventListener("click", (e) => { if (e.target === mask) mask.remove(); });
+    mask.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") mask.remove();
+      if (e.key === "Enter" && e.target !== filter) ok.click();
+    });
+    document.body.appendChild(mask);
+    if (isNew) inp.focus(); else inp.select();
+    syncCount();
+  }
+
+  async function delGroup(g) {
+    if (!confirm(`删除分组「${g.name}」？组内节点不会被删除。`)) return;
+    const d = await api("/api/groups", "POST", { delete: g.name });
+    if (d.ok === false) { toast(d.message || "删除失败"); return; }
+    toast(d.message + (d.need_restart ? "，重启 sing-box 后生效" : ""));
+    await loadState();
+    probeGroup();
+  }
+
+  async function selectNode(name) {
+    const g = activeGroup().name;
+    const d = await api("/api/nodes", "POST", { node: name });
+    if (d.ok === false) { toast(d.message || "切换失败"); return; }
+    toast(name ? `「${g}」固定到「${name}」` : `「${g}」改回自动（延迟最低）`);
+    await loadState();
+  }
+
+  async function switchGroup(name) {
+    const d = await api("/api/groups", "POST", { active: name });
+    if (d.ok === false) { toast(d.message || "切换失败"); return; }
+    toast(`已切到「${name}」` + (d.need_restart ? "，重启 sing-box 后生效" : ""));
+    await loadState();
+    probeGroup();
+  }
+
+  /* 给当前分组刷一轮 TCP 握手，进页面 / 换组 / 改成员后调用 */
+  function probeGroup() {
+    const names = groupNodes().map((n) => n.name);
+    if (!names.length) return Promise.resolve();
+    return runNodeTest(names, "tcp", null, { silent: true, sort: true }).catch(() => {});
+  }
+
+  /* ---- 节点延迟：测的是「当前代理组」里的节点 ---- */
   function renderLatency() {
     const box = $("#dashLatency");
     if (!box) return;
     clear(box);
-    const o = STATE?.config?.outlet || {};
-    const rows = nodesAlive()
-      .map((n) => ({ n, r: delayMap[n.name] }))
-      .filter((x) => x.r && x.r.reachable && x.r.ms !== null && x.r.ms !== undefined)
-      .sort((a, b) => a.r.ms - b.r.ms)
-      .slice(0, 3);
-    if (!rows.length) {
-      box.appendChild(el("div", "muted", "点右上「测速」跑一轮 TCP 握手，这里列出最快的三个节点。"));
+    const g = activeGroup();
+    const list = groupNodes();
+    if (!list.length) {
+      box.appendChild(el("div", "muted", "当前分组没有节点，用上面的「编辑分组」勾几个进来。"));
       return;
     }
-    const max = Math.max.apply(null, rows.map((x) => x.r.ms)) || 1;
+    const measured = list.filter((n) => {
+      const r = delayMap[n.name];
+      return r && r.reachable && r.ms !== null && r.ms !== undefined;
+    });
+    if (!measured.length) {
+      box.appendChild(el("div", "muted",
+        `点右上「测速」测这一组的 ${list.length} 个节点（按 TCP 握手）。`));
+      return;
+    }
+    const rowsAll = list.map((n) => ({ n, r: delayMap[n.name] || null }))
+      .sort((a, b) => {
+        const ka = delayRank(a.r), kb = delayRank(b.r);
+        if (ka !== kb) return ka - kb;
+        if (ka === 0) return a.r.ms - b.r.ms;
+        return 0;
+      });
+    let rows = rowsAll.slice(0, 5);
+    // 固定的那个节点延迟不一定最低，但它才是当前出口，得让人看得见
+    if (g.node && !rows.some((x) => x.n.name === g.node)) {
+      const hit = rowsAll.find((x) => x.n.name === g.node);
+      if (hit) rows = rows.slice(0, 4).concat([hit]);
+    }
+    const max = Math.max.apply(null, measured.map((n) => delayMap[n.name].ms)) || 1;
     rows.forEach(({ n, r }) => {
-      const row = el("div", "dlrow" + (n.name === o.sb_node ? " cur" : ""));
-      row.title = `点一下把出口切到「${n.name}」`;
-      const name = el("div", "dlname", n.name);
-      row.appendChild(name);
+      const ok = r && r.reachable && r.ms !== null && r.ms !== undefined;
+      const row = el("div", "dlrow" + (n.name === g.node ? " cur" : ""));
+      row.title = ok
+        ? `点一下把「${g.name}」固定到「${n.name}」`
+        : `「${n.name}」本次没测通，点一下仍可固定到它`;
+      row.appendChild(el("div", "dlname", n.name));
       const bar = el("div", "dlbar");
-      const fill = el("i", delayKind(r));
-      fill.style.width = Math.max(8, Math.round((r.ms / max) * 100)) + "%";
+      const fill = el("i", r ? delayKind(r) : "bad");
+      fill.style.width = ok ? Math.max(8, Math.round((r.ms / max) * 100)) + "%" : "100%";
+      if (!ok) fill.style.opacity = ".35";
       bar.appendChild(fill);
       row.appendChild(bar);
-      row.appendChild(el("div", "dlms", `${r.ms}ms`));
+      row.appendChild(el("div", "dlms", ok ? `${r.ms}ms` : (r ? "TIMEOUT" : "—")));
       row.addEventListener("click", () => safe(() => setActiveNode(n), "切换出口"));
       box.appendChild(row);
     });
@@ -2133,20 +2495,14 @@ const Dash = (function () {
     const outlet = $("#btnCoreOutlet");
     if (outlet) outlet.addEventListener("click", () => gotoTab("outlet"));
 
-    const sel = $("#dashNode");
-    if (sel) sel.addEventListener("change", () => safe(async () => {
-      const v = sel.value;
-      await api("/api/nodes", "POST", { node: v });
-      toast(v ? `出口已切到「${v}」` : "已取消固定，按规则自动选");
-      await loadState();
-    }, "切换节点"));
+    const gbtn = $("#btnDashGroup");
+    if (gbtn) gbtn.addEventListener("click", () => Pop.toggle(gbtn, groupMenu(), { cls: "wide" }));
 
-    const unpin = $("#btnDashUnpin");
-    if (unpin) unpin.addEventListener("click", () => safe(async () => {
-      await api("/api/nodes", "POST", { node: "" });
-      toast("已取消固定");
-      await loadState();
-    }, "取消固定"));
+    const nbtn = $("#btnDashNode");
+    if (nbtn) nbtn.addEventListener("click", () => Pop.toggle(nbtn, nodeMenu(), { cls: "wide" }));
+
+    const ged = $("#btnDashGroupEdit");
+    if (ged) ged.addEventListener("click", () => safe(() => openGroupEditor(activeGroup()), "编辑分组"));
 
     const mode = $("#dashMode");
     if (mode) mode.addEventListener("change", () => safe(() => setMode(mode.value), "切换出口方式"));
@@ -2164,9 +2520,13 @@ const Dash = (function () {
     const test = $("#btnDashTest");
     if (test) test.addEventListener("click", () => safe(async () => {
       const b = $("#btnDashTest");
+      const names = groupNodes().map((n) => n.name);
+      if (!names.length) { toast("当前分组没有节点"); return; }
       b.disabled = true;
       b.textContent = "测速中…";
-      try { await runNodeTest(null, "tcp"); } finally { b.disabled = false; b.textContent = "测速"; }
+      try {
+        await runNodeTest(names, "tcp", null, { sort: true });
+      } finally { b.disabled = false; b.textContent = "测速"; }
     }, "测速"));
 
     const upd = $("#btnDashUpdateSubs");
@@ -2196,7 +2556,7 @@ const Dash = (function () {
     const sys = $("#dashSys");
     if (sys) sys.checked = !!c.targets?.system;
     renderCore();
-    renderProxy();
+    renderGroup();
     renderLatency();
     renderSubs();
     renderFinal();
@@ -2209,7 +2569,7 @@ const Dash = (function () {
 
   // 延迟/节点变化后由外部调（renderNodes / 测速结束时）
   function onNodes() {
-    renderProxy();
+    renderGroup();
     renderLatency();
   }
 

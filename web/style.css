@@ -754,3 +754,124 @@ table.data th { color: var(--muted); font-weight: 400; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .dsub-meta { font-size: 11px; color: var(--muted); display: flex; gap: 8px; }
+
+/* ============================================================
+   代理组：分组胶囊、节点胶囊、分组菜单、编辑弹窗
+   ============================================================ */
+.gpill {
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 160px; padding: 3px 9px 3px 8px;
+  border-radius: 999px; cursor: pointer; font: inherit;
+  font-size: 12px; font-weight: 600; letter-spacing: .2px;
+  color: var(--accent); background: var(--accent-soft);
+  border: 1px solid rgba(230, 182, 79, 0.32);
+}
+.gpill:hover { border-color: var(--accent); }
+.gpill .gico { width: 13px; height: 13px; flex: 0 0 13px; }
+.gpill .caret { width: 11px; height: 11px; flex: 0 0 11px; opacity: .8; }
+.gpill > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.npill {
+  display: inline-flex; align-items: center; gap: 7px;
+  align-self: flex-start;
+  max-width: 100%; padding: 5px 10px 5px 11px;
+  border-radius: 999px; cursor: pointer; font: inherit;
+  font-size: 13px; font-weight: 600; text-align: left;
+  color: var(--accent); background: var(--accent-soft);
+  border: 1px solid rgba(230, 182, 79, 0.32);
+}
+.npill:hover { border-color: var(--accent); }
+.npill > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.npill .caret { width: 11px; height: 11px; flex: 0 0 11px; opacity: .8; }
+
+.dtype {
+  font-size: 11.5px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.dmuted { font-size: 11.5px; color: var(--muted); }
+
+/* 分组菜单 */
+.pop.wide { min-width: 236px; max-height: min(70vh, 460px); overflow-y: auto; }
+.pop-head {
+  padding: 3px 8px 6px; font-size: 11px; color: var(--muted);
+  letter-spacing: .3px;
+}
+.pg-row, .pop-new {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 8px; border-radius: 8px; cursor: pointer;
+}
+.pg-row:hover, .pop-new:hover { background: var(--card-2); }
+.pg-check { width: 14px; flex: 0 0 14px; font-size: 12px; color: var(--accent); text-align: center; }
+.pg-name {
+  flex: 1; min-width: 0; font-size: 13px; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pg-row.on .pg-name { font-weight: 600; }
+.pg-ico {
+  width: 22px; height: 22px; flex: 0 0 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 6px; background: transparent;
+  color: var(--muted); cursor: pointer; padding: 0;
+}
+.pg-ico svg { width: 13px; height: 13px; }
+.pg-ico:hover { background: var(--card); color: var(--accent); }
+.pg-ico.del:hover { color: var(--bad); }
+
+/* 节点菜单：两行（名字 + 协议·延迟） */
+.nd-row {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 7px 8px; border-radius: 8px; cursor: pointer;
+}
+.nd-row:hover { background: var(--card-2); }
+.nd-check { width: 14px; flex: 0 0 14px; font-size: 12px; color: var(--accent); line-height: 18px; text-align: center; }
+.nd-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.nd-name {
+  font-size: 13px; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.nd-meta { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+
+/* 延迟卡片：五行以内不出现滚动条，多了再滚，别把卡片撑高 */
+.dash-card .dlat { max-height: 162px; overflow-y: auto; gap: 5px; }
+.dash-card .dlrow { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) 46px; }
+
+/* 分组编辑弹窗 */
+.modal.geditor { max-width: 460px; }
+.ged-list {
+  max-height: 260px; overflow-y: auto; margin-top: 4px;
+  border: 1px solid var(--line); border-radius: 9px; padding: 4px 8px 4px 4px;
+  background: var(--bg); scrollbar-gutter: stable;
+}
+.ged-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 7px; border-radius: 7px; cursor: pointer;
+  font-size: 12.5px;
+}
+.ged-item:hover { background: var(--card-2); }
+.ged-item input { margin: 0; }
+.ged-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ged-type { font-size: 11px; color: var(--muted); font-family: var(--mono); flex: 0 0 auto; }
+/* label 是 flex，默认的 [hidden] 会被 display:flex 盖掉，必须显式隐藏 */
+.ged-item[hidden] { display: none !important; }
+
+/* 分组编辑弹窗的工具栏：筛选独占一行，下面是已选计数 + 批量按钮 */
+.ged-bar {
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: 6px 10px; margin: 2px 0 6px;
+}
+.ged-filter {
+  flex: 1 1 100%; min-width: 0; padding: 5px 9px; border-radius: 7px;
+  background: var(--bg); border: 1px solid var(--line); color: var(--text);
+  font: inherit; font-size: 12px;
+}
+.ged-filter:focus { outline: none; border-color: var(--accent); }
+.ged-count {
+  font-size: 11.5px; color: var(--muted); white-space: nowrap;
+  font-family: var(--mono); margin-right: auto;
+}
+.ged-bar .linkbtn { white-space: nowrap; font-size: 12px; }
+.ged-bar .linkbtn:disabled { opacity: .38; cursor: default; }
+.ged-bar .linkbtn:not(:disabled):hover { color: var(--accent); }
+.ged-item input[type="checkbox"] { width: 14px; height: 14px; accent-color: var(--accent); }
+.modal-btns button.danger { color: var(--bad); border-color: rgba(224, 106, 90, 0.35); }
+.modal-btns button.danger:hover { background: var(--bad-soft); }

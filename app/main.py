@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import auth
+from . import groups as groupsm
 from . import health
 from . import host
 from . import log as uplog
@@ -120,7 +121,9 @@ class SubDelReq(BaseModel):
 class NodeReq(BaseModel):
     # None = 本次请求没打算改停用表（避免只传 delete / order 时把停用状态清空）
     disabled: list[str] | None = None
-    node: str = ""
+    # None = 没打算改选中节点；"" = 改回自动（延迟最低）
+    node: str | None = None
+    group: str = ""                                    # 指定分组，空 = 当前分组
     rename: dict = Field(default_factory=dict)   # {from: old_name, to: new_name}
     delete: list[str] = Field(default_factory=list)    # 批量删除节点（进黑名单）
     restore: list[str] = Field(default_factory=list)   # 从黑名单恢复
@@ -203,6 +206,9 @@ def api_auth_password(req: PassReq):
 @app.get("/api/state", dependencies=[Depends(guard)])
 def api_state():
     cfg = st.load()
+    # 分组是按节点集推导出来的：每次取状态先整理一遍，
+    # 老配置没有分组时前端也能立刻看到「PROXY / 全部节点」
+    groupsm.ensure(cfg)
     return {"ok": True, "config": cfg.model_dump(), "probe": probe.snapshot()}
 
 
@@ -463,7 +469,10 @@ def api_warp(req: OutletReq):
 def api_singbox(req: OutletReq):
     cfg = st.load()
     if req.node:
-        cfg.outlet.sb_node = req.node
+        try:
+            groupsm.set_node(cfg, req.node)
+        except ValueError as e:
+            return {"ok": False, "message": str(e)}
         st.save(cfg)
     if req.action == "start":
         try:
@@ -505,6 +514,7 @@ def api_subs_fetch(req: SubReq):
     cfg = st.load()
     cfg.outlet.sb_nodes = parsed["nodes"]
     _apply_order(cfg)
+    groupsm.ensure(cfg)
     if req.url.strip():
         cfg.outlet.sub_url = req.url.strip()
     st.save(cfg)
@@ -529,7 +539,8 @@ def api_subs_test(req: NodeTestReq):
     ``mode=tcp`` 只做端口握手，快但没有参考价值。
     """
     cfg = st.load()
-    nodes = req.nodes or cfg.outlet.sb_nodes
+    # 不指定节点就测「当前代理组」：首页的节点延迟卡片测的就是这一组
+    nodes = req.nodes or groupsm.enabled_nodes(cfg)
     r = nettest.test_nodes(nodes, mode=req.mode, url=req.url, timeout_ms=req.timeout)
     up = sum(1 for x in r["results"] if x.get("reachable"))
     total = len(r["results"])
@@ -596,6 +607,7 @@ def _resync(cfg: st.AppCfg) -> dict:
         cfg.outlet.sb_node = ""
     if cfg.outlet.sb_disabled:
         cfg.outlet.sb_disabled = [d for d in cfg.outlet.sb_disabled if d in names]
+    groupsm.ensure(cfg)
     st.save(cfg)
     # 汇总日志
     ok_names = [s.get("name") for s in res["summary"] if s.get("ok")]
@@ -639,6 +651,7 @@ def api_subs_add(req: SubAddReq):
         for n in parsed["nodes"]:
             n["source"] = sub["name"]
         cfg.outlet.sb_nodes = subs._dedupe(cfg.outlet.sb_nodes + parsed["nodes"])
+        groupsm.ensure(cfg)
         st.save(cfg)
         return {"ok": True, "message": parsed["message"], "summary": [{"name": sub["name"], "ok": True, "count": len(parsed["nodes"])}],
                 "subscriptions": cfg.outlet.subscriptions,
@@ -697,6 +710,7 @@ def api_subs_update(req: SubUpdateReq):
             if cfg.outlet.sb_node and cfg.outlet.sb_node not in names:
                 cfg.outlet.sb_node = ""
             cfg.outlet.sb_disabled = [d for d in cfg.outlet.sb_disabled if d in names]
+            groupsm.ensure(cfg)
             st.save(cfg)
             gone = before - len(cfg.outlet.sb_nodes)
             uplog.append("info", "subs", f"停用订阅「{src}」，移除 {gone} 个节点")
@@ -738,6 +752,7 @@ def api_subs_del(req: SubDelReq):
     if cfg.outlet.sb_node and cfg.outlet.sb_node not in names:
         cfg.outlet.sb_node = ""
     cfg.outlet.sb_disabled = [d for d in cfg.outlet.sb_disabled if d in names]
+    groupsm.ensure(cfg)
     st.save(cfg)
     uplog.append("info", "subs",
                  f"删除 {len(gone)} 个订阅，同步移除 {removed} 个节点（剩余 {len(keep)} 个订阅）")
@@ -745,6 +760,66 @@ def api_subs_del(req: SubDelReq):
             "message": f"已删除 {len(gone)} 个订阅、{removed} 个节点",
             "subscriptions": cfg.outlet.subscriptions,
             "nodes": [_node_view(n) for n in cfg.outlet.sb_nodes]}
+
+
+# --------------------------------------------------------------------------
+# 代理分组（v2rayA 风格的「代理组」：分组 = 出口可用的节点集合）
+# --------------------------------------------------------------------------
+def _groups_view(cfg: st.AppCfg) -> dict:
+    gs = groupsm.ensure(cfg)
+    act = groupsm.active(cfg)
+    return {
+        "groups": [{"name": g["name"], "count": len(g["nodes"]), "nodes": g["nodes"],
+                    "node": g["node"], "auto": not g["node"]} for g in gs],
+        "active": act["name"],
+        "group_node": act["node"],
+        "nodes": [_node_view(n) for n in groupsm.enabled_nodes(cfg)],
+        "sb_node": cfg.outlet.sb_node,
+    }
+
+
+class GroupReq(BaseModel):
+    active: str = ""
+    create: dict = Field(default_factory=dict)    # {name, nodes}
+    rename: dict = Field(default_factory=dict)    # {from, to}
+    delete: str = ""
+    update: dict = Field(default_factory=dict)    # {name, nodes, node}
+
+
+@app.get("/api/groups", dependencies=[Depends(guard)])
+def api_groups_get():
+    return {"ok": True, **_groups_view(st.load())}
+
+
+@app.post("/api/groups", dependencies=[Depends(guard)])
+def api_groups_post(req: GroupReq):
+    cfg = st.load()
+    try:
+        if req.create:
+            msg = groupsm.create(cfg, req.create.get("name"), req.create.get("nodes"))
+        elif req.rename:
+            msg = groupsm.rename(cfg, req.rename.get("from"), req.rename.get("to"))
+        elif req.delete:
+            msg = groupsm.delete(cfg, req.delete)
+        elif req.update:
+            msg = groupsm.update(cfg, req.update.get("name"),
+                                 req.update.get("nodes"), req.update.get("node"))
+        elif req.active:
+            msg = groupsm.set_active(cfg, req.active)
+        else:
+            return {"ok": False, "message": "没有指定要做什么（active / create / rename / delete / update）"}
+    except ValueError as e:
+        return {"ok": False, "message": str(e)}
+    groupsm.ensure(cfg)
+    st.save(cfg)
+    uplog.append("info", "nodes", msg)
+    # 分组变了 = 出口用的节点集变了，正在跑的 sing-box 要重启才生效
+    need = False
+    try:
+        need = cfg.outlet.mode == "singbox" and bool(outlets.sb_status(cfg).get("running"))
+    except Exception:
+        need = False
+    return {"ok": True, "message": msg, "need_restart": need, **_groups_view(cfg)}
 
 
 # --------------------------------------------------------------------------
@@ -764,9 +839,15 @@ def api_nodes(req: NodeReq):
                         n["outbound"]["tag"] = to
             if cfg.outlet.sb_node == frm:
                 cfg.outlet.sb_node = to
-            cfg.outlet.sb_disabled = [to if d == frm else d for d in cfg.outlet.sb_disabled]
+            if cfg.outlet.sb_disabled:
+                cfg.outlet.sb_disabled = [to if d == frm else d for d in cfg.outlet.sb_disabled]
             cfg.outlet.sb_removed = [to if d == frm else d for d in cfg.outlet.sb_removed]
             cfg.outlet.sb_order = [to if d == frm else d for d in cfg.outlet.sb_order]
+            # 分组里引用的也是节点名，一起改名
+            for g in cfg.outlet.sb_groups:
+                g["nodes"] = [to if x == frm else x for x in (g.get("nodes") or [])]
+                if g.get("node") == frm:
+                    g["node"] = to
     if req.delete:
         drop = {d for d in req.delete if d}
         cfg.outlet.sb_nodes = [n for n in cfg.outlet.sb_nodes if n["name"] not in drop]
@@ -793,11 +874,16 @@ def api_nodes(req: NodeReq):
         cfg.outlet.sb_order = [x for x in req.order if x]
     if req.disabled is not None:
         cfg.outlet.sb_disabled = [d for d in req.disabled if d]
-    if req.node:
-        cfg.outlet.sb_node = req.node
+    if req.node is not None:
+        # 选中节点现在挂在分组上："" = 分组内自动（延迟最低）
+        try:
+            groupsm.set_node(cfg, req.node, req.group)
+        except ValueError as e:
+            return {"ok": False, "message": str(e)}
     _apply_order(cfg)
+    groupsm.ensure(cfg)
     st.save(cfg)
-    return {"ok": True, "nodes": [
+    return {"ok": True, **_groups_view(cfg), "nodes": [
         {**_node_view(n), "disabled": n["name"] in cfg.outlet.sb_disabled}
         for n in cfg.outlet.sb_nodes
     ], "sb_node": cfg.outlet.sb_node, "sb_disabled": cfg.outlet.sb_disabled,

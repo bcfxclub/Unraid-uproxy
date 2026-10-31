@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>uproxy · Unraid 出网加速</title>
-<link rel="stylesheet" href="/static/style.css?v=36">
+<link rel="stylesheet" href="/static/style.css?v=41">
 </head>
 <body>
 
@@ -119,20 +119,26 @@
           <svg class="dico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg>
           <span class="dtitle">代理组</span>
           <span class="grow"></span>
-          <span class="dchip">PROXY</span>
+          <button id="btnDashGroup" class="gpill" title="切换 / 新建 / 改名 / 删除代理分组">
+            <svg class="gico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/><path d="M6.5 10.5v3a2 2 0 002 2H14"/></svg>
+            <span id="dashGroupName">PROXY</span>
+            <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
         </div>
         <div class="dstate">
-          <select id="dashNode" class="dselect" title="切换出口节点（等同在订阅页点卡片）">
-            <option value="">（还没有节点）</option>
-          </select>
+          <button id="btnDashNode" class="npill" title="在分组里选一个节点，或让它自动挑延迟最低的">
+            <span id="dashNodeName">自动（延迟最低）</span>
+            <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
           <div class="dstate-sub">
+            <span id="dashNodeMeta" class="dtype">—</span>
             <span id="dashDelay" class="dpill">—</span>
-            <span id="dashPin" class="dpill pin" hidden>已固定</span>
           </div>
         </div>
         <div class="drow">
-          <button id="btnDashUnpin" class="linkbtn">取消固定</button>
+          <button id="btnDashGroupEdit" class="linkbtn">编辑分组</button>
           <span class="grow"></span>
+          <span id="dashGroupCount" class="dmuted"></span>
           <button class="linkbtn" data-goto="subs">增删节点</button>
         </div>
       </div>
@@ -189,8 +195,9 @@
         <div class="dhead">
           <svg class="dico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M13 2L4 14h6l-1 8 9-12h-6z"/></svg>
           <span class="dtitle">节点延迟</span>
+          <span class="dchip" id="dashLatGroup">PROXY</span>
           <span class="grow"></span>
-          <button id="btnDashTest" class="mini">测速</button>
+          <button id="btnDashTest" class="mini" title="测当前代理组里的节点">测速</button>
         </div>
         <div id="dashLatency" class="dlat"></div>
       </div>
@@ -552,6 +559,6 @@
 </div>
 
 <div id="toast" class="toast"></div>
-<script src="/static/app.js?v=36"></script>
+<script src="/static/app.js?v=41"></script>
 </body>
 </html>
