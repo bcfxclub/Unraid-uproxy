@@ -290,7 +290,7 @@ async function copyText(text) {
 }
 
 /* ---------------- tabs（侧边栏） ---------------- */
-const TITLES = { overview: "概览", outlet: "出口", subs: "订阅", push: "下发", backup: "备份与还原", logs: "日志", account: "账号", docs: "文档" };
+const TITLES = { overview: "仪表板", outlet: "出口", subs: "订阅", push: "下发", backup: "备份与还原", logs: "日志", account: "账号", docs: "文档" };
 function switchTab(name) {
   const btn = $$(".nav button").find((x) => x.dataset.tab === name);
   if (!btn) return;
@@ -387,6 +387,7 @@ function renderConfig(c) {
   renderSubList(c.outlet.subscriptions || []);
   renderNodes();
   Route.boot(c.outlet);
+  Dash.render();
 }
 
 async function loadState() {
@@ -951,6 +952,7 @@ async function runNodeTest(names, mode, url, opts) {
   let sorted = false, saved = false;
   if (!names && res.length && testSortOn()) sorted = sortNodesByDelay();
   renderNodes();
+  Dash.onNodes();          // 首页「代理组 / 节点延迟」两张卡跟着刷新
   if (sorted) saved = await saveNodeOrder();
   if (opt.silent) return;
 
@@ -1541,6 +1543,16 @@ const Route = (function () {
 
   let bound = false;
 
+  /* 仪表板上的「分流模式」单选走这里：只改兜底动作，规则表原样保留 */
+  async function setFinal(final) {
+    const want = final === "proxy" ? "proxy" : "direct";
+    if (!M) await load();
+    M.final = want;
+    const fs = $("#selRouteFinal");
+    if (fs) fs.value = want;
+    await save(true);   // 保存并重启，立刻生效
+  }
+
   function boot(outlet) {
     refreshTun(outlet);
     if (bound) return;
@@ -1590,7 +1602,7 @@ const Route = (function () {
     });
   }
 
-  return { boot, load };
+  return { boot, load, get: () => M, setFinal };
 })();
 
 /* 新增订阅表单默认收起，省纵向空间 */
@@ -1891,6 +1903,320 @@ async function boot() {
   if (typeof Account !== "undefined") Account.boot();
 }
 
+/* ---------------- 首页仪表板 ----------------
+   把「能不能用」的关键信息摆到一屏：出口活着没、现在是哪个节点、走什么分流、
+   哪个节点最快、订阅还新不新。所有控件都直接对接真实接口，不做假动作。 */
+const Dash = (function () {
+  let last = null;   // 最近一次 /api/outlet/stats
+
+  const MODE_TEXT = {
+    none: "未启用出口", manual: "手动代理地址", warp: "Cloudflare WARP", singbox: "sing-box",
+  };
+
+  function nodesAlive() {
+    const o = STATE?.config?.outlet || {};
+    const dis = new Set(o.sb_disabled || []);
+    return (o.sb_nodes || []).filter((n) => n.outbound && !dis.has(n.name));
+  }
+
+  function gotoTab(name, focus) {
+    switchTab(name);
+    if (!focus) return;
+    setTimeout(() => {
+      const box = focus === "route" ? $("#cardRoute") : null;
+      if (box) box.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
+  }
+
+  /* ---- 核心状态 ---- */
+  function renderCore() {
+    const o = STATE?.config?.outlet || {};
+    const mode = o.mode || "none";
+    const running = !!(last && last.running);
+    const dot = $("#coreDot"), main = $("#coreState"), sub = $("#coreSub");
+    const btn = $("#btnCoreToggle");
+    if (!dot || !main) return;
+
+    dot.className = "ddot";
+    if (mode === "none" || mode === "manual") {
+      dot.classList.add("warn");
+      main.textContent = "未启用出口";
+      sub.textContent = mode === "manual"
+        ? `手动代理：${o.http || "未填写地址"}`
+        : "只下发镜像源，流量不走代理";
+      if (btn) btn.hidden = true;
+      return;
+    }
+
+    const alive = nodesAlive().length;
+    const detail = mode === "singbox"
+      ? `sing-box · 端口 ${o.sb_port || 7890} · 可用节点 ${alive}`
+      : `WARP · 端口 ${o.warp_port || 9091}`;
+    if (running) {
+      dot.classList.add("ok");
+      main.textContent = "正在运行";
+      sub.textContent = detail;
+    } else {
+      dot.classList.add("bad");
+      main.textContent = "已停止";
+      sub.textContent = detail;
+    }
+    if (btn) {
+      btn.hidden = false;
+      btn.textContent = running ? "停止" : "启动";
+      btn.classList.toggle("primary", !running);
+    }
+  }
+
+  async function refreshStats() {
+    try {
+      const d = await api("/api/outlet/stats");
+      onStats(d);
+    } catch (e) { /* 401 等由 api 统一处理 */ }
+  }
+
+  async function toggleCore() {
+    const o = STATE?.config?.outlet || {};
+    const running = !!(last && last.running);
+    const act = running ? "stop" : "start";
+    if (o.mode === "none" || o.mode === "manual") { toast("先在下面选一个出口方式"); return; }
+    // 首次启动还没指定节点时，替他选第一个可用节点，别让后端报「请先选节点」
+    if (o.mode === "singbox" && !running && !o.sb_node) {
+      const list = nodesAlive();
+      if (!list.length) { toast("还没有可用节点，先去「订阅」页添加订阅"); return; }
+      await api("/api/nodes", "POST", { node: list[0].name });
+      await loadState();
+    }
+    if (o.mode === "singbox") await sb(act);
+    else await warp(act);
+    toast(`${o.mode === "singbox" ? "sing-box" : "WARP"} ${running ? "已停止" : "启动中…"}`);
+    await refreshStats();
+    // 容器起停要一两秒，稍后再对一次状态，避免按钮文字比实际慢半拍
+    setTimeout(refreshStats, 1800);
+  }
+
+  /* ---- 代理组（当前节点 + 延迟） ---- */
+  function renderProxy() {
+    const o = STATE?.config?.outlet || {};
+    const sel = $("#dashNode");
+    if (!sel) return;
+    const list = nodesAlive();
+    clear(sel);
+    const auto = el("option", "", list.length ? "（未固定，按规则/排序自动）" : "（还没有可用节点）");
+    auto.value = "";
+    sel.appendChild(auto);
+    list.forEach((n) => {
+      const op = el("option", "", n.name);
+      op.value = n.name;
+      sel.appendChild(op);
+    });
+    sel.value = o.sb_node && list.some((n) => n.name === o.sb_node) ? o.sb_node : "";
+
+    const d = o.sb_node ? delayMap[o.sb_node] : null;
+    const pd = $("#dashDelay");
+    if (pd) {
+      pd.textContent = d ? delayText(d) : "未测速";
+      pd.className = "dpill" + (d ? ` ${delayKind(d)}` : "");
+      pd.title = d ? delayTitle(d) : "点「节点延迟」卡片里的测速按钮";
+    }
+    const pin = $("#dashPin");
+    if (pin) pin.hidden = !o.sb_node;
+    const unpin = $("#btnDashUnpin");
+    if (unpin) unpin.hidden = !o.sb_node;
+  }
+
+  /* ---- 节点延迟 Top 3 ---- */
+  function renderLatency() {
+    const box = $("#dashLatency");
+    if (!box) return;
+    clear(box);
+    const o = STATE?.config?.outlet || {};
+    const rows = nodesAlive()
+      .map((n) => ({ n, r: delayMap[n.name] }))
+      .filter((x) => x.r && x.r.reachable && x.r.ms !== null && x.r.ms !== undefined)
+      .sort((a, b) => a.r.ms - b.r.ms)
+      .slice(0, 3);
+    if (!rows.length) {
+      box.appendChild(el("div", "muted", "点右上「测速」跑一轮 TCP 握手，这里列出最快的三个节点。"));
+      return;
+    }
+    const max = Math.max.apply(null, rows.map((x) => x.r.ms)) || 1;
+    rows.forEach(({ n, r }) => {
+      const row = el("div", "dlrow" + (n.name === o.sb_node ? " cur" : ""));
+      row.title = `点一下把出口切到「${n.name}」`;
+      const name = el("div", "dlname", n.name);
+      row.appendChild(name);
+      const bar = el("div", "dlbar");
+      const fill = el("i", delayKind(r));
+      fill.style.width = Math.max(8, Math.round((r.ms / max) * 100)) + "%";
+      bar.appendChild(fill);
+      row.appendChild(bar);
+      row.appendChild(el("div", "dlms", `${r.ms}ms`));
+      row.addEventListener("click", () => safe(() => setActiveNode(n), "切换出口"));
+      box.appendChild(row);
+    });
+  }
+
+  /* ---- 订阅摘要 ---- */
+  function renderSubs() {
+    const box = $("#dashSubs");
+    if (!box) return;
+    const subs = STATE?.config?.outlet?.subscriptions || [];
+    const cnt = $("#dashSubCount");
+    if (cnt) cnt.textContent = String(subs.length);
+    clear(box);
+    if (!subs.length) {
+      box.appendChild(el("div", "muted", "还没有订阅，去「订阅」页添加一个。"));
+      return;
+    }
+    subs.slice(0, 4).forEach((s) => {
+      const d = el("div", "dsub");
+      d.appendChild(el("div", "dsub-name", s.name || s.url || "未命名订阅"));
+      const meta = el("div", "dsub-meta");
+      meta.appendChild(el("span", "", `${s.count || 0} 节点`));
+      meta.appendChild(el("span", "", s.updated_at ? `更新于 ${s.updated_at}` : "还没更新过"));
+      if (s.enabled === false) meta.appendChild(el("span", "", "已停用"));
+      d.appendChild(meta);
+      box.appendChild(d);
+    });
+  }
+
+  /* ---- 分流模式（跟规则表的兜底动作是同一份数据） ---- */
+  function renderFinal() {
+    const M = Route.get();
+    const fin = (M && M.final) || STATE?.config?.outlet?.sb_final || "direct";
+    $$('input[name="dashFinal"]').forEach((r) => { r.checked = r.value === fin; });
+  }
+
+  async function setFinal(v) {
+    try {
+      await Route.setFinal(v);
+      toast(v === "proxy" ? "已切到全局代理模式" : "已切到大陆白名单模式");
+    } finally {
+      renderFinal();
+    }
+  }
+
+  /* ---- 出口方式 / TUN / 系统变量 ---- */
+  async function setMode(v) {
+    await save({ outlet: { mode: v } });
+    // 出口页的单选/面板跟着切，别让两处显示不一致
+    renderConfig(STATE.config);
+    toast(`出口方式：${MODE_TEXT[v] || v}`);
+    refreshStats();
+  }
+
+  async function setTun(on) {
+    await save({ outlet: { sb_tun: !!on } });
+    const sbTun = $("#sbTun");
+    if (sbTun) sbTun.checked = !!on;
+    toast(on ? "已开启 TUN（重启 sing-box 后生效）" : "已关闭 TUN");
+  }
+
+  async function setSys(on) {
+    await save({ targets: { system: !!on } });
+    const box = $("#t-system");     // 「下发」页的同一个勾选，别两处不一致
+    if (box) box.checked = !!on;
+    render();
+    toast(on ? "已勾选系统环境变量，去「下发」页点应用才会写入" : "已取消系统环境变量");
+  }
+
+  function bind() {
+    $$("[data-goto]").forEach((b) => {
+      b.addEventListener("click", () => gotoTab(b.dataset.goto, b.dataset.focus));
+    });
+
+    const btnCore = $("#btnCoreToggle");
+    if (btnCore) btnCore.addEventListener("click", () => safe(toggleCore, "出口启停"));
+    const logs = $("#btnCoreLogs");
+    if (logs) logs.addEventListener("click", () => gotoTab("logs"));
+    const outlet = $("#btnCoreOutlet");
+    if (outlet) outlet.addEventListener("click", () => gotoTab("outlet"));
+
+    const sel = $("#dashNode");
+    if (sel) sel.addEventListener("change", () => safe(async () => {
+      const v = sel.value;
+      await api("/api/nodes", "POST", { node: v });
+      toast(v ? `出口已切到「${v}」` : "已取消固定，按规则自动选");
+      await loadState();
+    }, "切换节点"));
+
+    const unpin = $("#btnDashUnpin");
+    if (unpin) unpin.addEventListener("click", () => safe(async () => {
+      await api("/api/nodes", "POST", { node: "" });
+      toast("已取消固定");
+      await loadState();
+    }, "取消固定"));
+
+    const mode = $("#dashMode");
+    if (mode) mode.addEventListener("change", () => safe(() => setMode(mode.value), "切换出口方式"));
+
+    const tun = $("#dashTun");
+    if (tun) tun.addEventListener("change", () => safe(() => setTun(tun.checked), "切换 TUN"));
+
+    const sys = $("#dashSys");
+    if (sys) sys.addEventListener("change", () => safe(() => setSys(sys.checked), "切换系统变量"));
+
+    $$('input[name="dashFinal"]').forEach((r) => {
+      r.addEventListener("change", () => { if (r.checked) safe(() => setFinal(r.value), "切换分流模式"); });
+    });
+
+    const test = $("#btnDashTest");
+    if (test) test.addEventListener("click", () => safe(async () => {
+      const b = $("#btnDashTest");
+      b.disabled = true;
+      b.textContent = "测速中…";
+      try { await runNodeTest(null, "tcp"); } finally { b.disabled = false; b.textContent = "测速"; }
+    }, "测速"));
+
+    const upd = $("#btnDashUpdateSubs");
+    if (upd) upd.addEventListener("click", () => safe(async () => {
+      const b = $("#btnDashUpdateSubs");
+      b.disabled = true;
+      b.textContent = "更新中…";
+      try {
+        const d = await api("/api/subs/update", "POST", {});
+        toast(d.message || "订阅已更新");
+        await loadState();
+      } finally {
+        b.disabled = false;
+        b.textContent = "全部更新";
+      }
+    }, "更新订阅"));
+  }
+
+  function render() {
+    const c = STATE?.config;
+    if (!c) return;
+    const o = c.outlet || {};
+    const sel = $("#dashMode");
+    if (sel && o.mode) sel.value = o.mode;
+    const tun = $("#dashTun");
+    if (tun) tun.checked = !!o.sb_tun;
+    const sys = $("#dashSys");
+    if (sys) sys.checked = !!c.targets?.system;
+    renderCore();
+    renderProxy();
+    renderLatency();
+    renderSubs();
+    renderFinal();
+  }
+
+  function onStats(d) {
+    last = d || null;
+    renderCore();
+  }
+
+  // 延迟/节点变化后由外部调（renderNodes / 测速结束时）
+  function onNodes() {
+    renderProxy();
+    renderLatency();
+  }
+
+  bind();
+  return { render, onStats, onNodes, refreshStats };
+})();
+
 /* ---------------- 实时流量图（仿 v2rayA） ---------------- */
 const Traffic = (function () {
   const MAX = 60;
@@ -1900,7 +2226,7 @@ const Traffic = (function () {
   function resize() {
     if (!canvas) return;
     const w = canvas.clientWidth || 600;
-    const h = 160;
+    const h = canvas.clientHeight || 150;   // 高度交给 CSS（仪表板卡片比旧版矮）
     const dpr = window.devicePixelRatio || 1;
     canvas.width = w * dpr;
     canvas.height = h * dpr;
@@ -1918,7 +2244,7 @@ const Traffic = (function () {
 
   function draw() {
     if (!ctx || !canvas) return;
-    const w = canvas.clientWidth || 600, h = 160;
+    const w = canvas.clientWidth || 600, h = canvas.clientHeight || 150;
     ctx.clearRect(0, 0, w, h);
     ctx.strokeStyle = "rgba(255,255,255,0.06)";
     ctx.lineWidth = 1;
@@ -1927,6 +2253,15 @@ const Traffic = (function () {
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
     }
     const all = down.concat(up);
+    if (!all.some((v) => v > 0)) {
+      // 空状态给一句话，别让整块区域看起来像加载失败
+      ctx.fillStyle = "rgba(233,228,216,0.22)";
+      ctx.font = '12px -apple-system, "Segoe UI", "PingFang SC", sans-serif';
+      ctx.textAlign = "center";
+      ctx.fillText("暂无流量 · 启动出口后这里会画出曲线", w / 2, h / 2);
+      ctx.textAlign = "left";
+      return;
+    }
     const max = Math.max(1, ...all);
     const step = w / (MAX - 1);
     [{ data: down, color: "#4fd08a", fill: "rgba(79,208,138,0.18)" },
@@ -1987,10 +2322,12 @@ const Traffic = (function () {
       if (!d.running) {
         $("#tHint").textContent = "未启用出口（「出口」页启动 WARP / sing-box 后显示）";
         reset();
+        Dash.onStats(d);
         return;
       }
       $("#tHint").textContent = d.mode === "warp" ? "出口：Cloudflare WARP" : "出口：sing-box";
       push(d);
+      Dash.onStats(d);
     } catch (e) { /* 401 等由 api 统一处理 */ }
   }
 

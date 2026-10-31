@@ -598,3 +598,159 @@ table.data th { color: var(--muted); font-weight: 400; }
 
 /* 视图切换：用中性的“选中”底色，别和右侧主按钮抢金色 */
 .listbar button.on { background: var(--card-2); color: var(--text); border-color: var(--muted); }
+
+/* ============================================================
+   首页仪表板（仿 v2rayA Dashboard）
+   12 列网格，卡片按 span 拼成两行；窄屏自动降成 6 列 / 单列。
+   ============================================================ */
+.dash {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 14px;
+  align-items: stretch;
+}
+.dash > .card { margin-bottom: 0; min-width: 0; }
+.dspan-3 { grid-column: span 3; }
+.dspan-4 { grid-column: span 4; }
+.dspan-5 { grid-column: span 5; }
+.dspan-6 { grid-column: span 6; }
+.dspan-7 { grid-column: span 7; }
+.dspan-8 { grid-column: span 8; }
+
+@media (max-width: 1180px) {
+  .dash { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .dspan-3 { grid-column: span 3; }
+  .dspan-5, .dspan-7 { grid-column: span 6; }
+}
+@media (max-width: 760px) {
+  .dash { grid-template-columns: 1fr; }
+  .dash > .card { grid-column: 1 / -1 !important; }
+}
+
+/* 卡片通用：头部 + 主体 + 底部操作，竖向排开 */
+.dash-card { display: flex; flex-direction: column; gap: 10px; }
+.dhead {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 600; color: var(--text);
+  min-height: 22px;
+}
+.dhead .dico { width: 16px; height: 16px; flex: 0 0 16px; color: var(--muted); }
+.dhead .dtitle { white-space: nowrap; }
+.dhead .grow { flex: 1; min-width: 6px; }
+.dchip {
+  font-size: 11px; font-weight: 500;
+  padding: 2px 8px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+  border: 1px solid rgba(230,182,79,0.28);
+}
+.ddot {
+  width: 9px; height: 9px; flex: 0 0 9px; border-radius: 50%;
+  background: var(--muted);
+  box-shadow: 0 0 0 3px rgba(143,136,120,0.14);
+}
+.ddot.ok { background: var(--ok); box-shadow: 0 0 0 3px rgba(79,208,138,0.16); }
+.ddot.bad { background: var(--bad); box-shadow: 0 0 0 3px rgba(224,106,90,0.16); }
+.ddot.warn { background: var(--warn); box-shadow: 0 0 0 3px rgba(230,182,79,0.16); }
+
+/* 网络速度卡片的速率与脚注 */
+.drate { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; }
+.drate b { color: var(--ok); font-weight: 600; }
+.drate.up b { color: var(--accent); }
+.drate i { font-style: normal; opacity: .8; }
+.dfoot {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 11.5px; color: var(--muted);
+  border-top: 1px solid var(--line);
+  padding-top: 8px; margin-top: 2px;
+  flex-wrap: wrap;
+}
+.dfoot b { color: var(--text); font-family: var(--mono); font-weight: 600; }
+.dfoot .muted { font-size: 11.5px; }
+.dash-card .tchart { height: 132px; }
+.dash-card .tnodes { margin-top: 0; }
+
+/* 状态块（核心状态 / 代理组共用） */
+.dstate { display: flex; flex-direction: column; gap: 8px; flex: 1; }
+.dstate-main { font-size: 15px; font-weight: 600; }
+.dstate-sub { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted); }
+.dpill {
+  font-size: 11px; padding: 2px 8px; border-radius: 999px;
+  background: var(--card-2); color: var(--muted); border: 1px solid var(--line);
+  font-family: var(--mono);
+}
+.dpill.ok { color: var(--ok); border-color: rgba(79,208,138,0.35); background: var(--ok-soft); }
+.dpill.warn { color: var(--warn); border-color: rgba(230,182,79,0.35); background: var(--warn-soft); }
+.dpill.bad { color: var(--bad); border-color: rgba(224,106,90,0.35); background: var(--bad-soft); }
+.dpill.pin { color: var(--accent); border-color: rgba(230,182,79,0.35); background: var(--accent-soft); }
+
+/* 卡片里的下拉：铺满，别被全局 min-width 撑爆 */
+.dselect {
+  min-width: 0; width: 100%;
+  padding: 7px 10px; font-size: 13px;
+  background: var(--card-2);
+}
+.flbl { font-size: 11px; color: var(--muted); display: block; margin-bottom: -4px; }
+
+/* 开关行 */
+.dtoggle {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 0;
+  border-top: 1px solid var(--line);
+}
+.dtoggle > span { flex: 1; min-width: 0; font-size: 12.5px; display: flex; flex-direction: column; }
+.dtoggle small { color: var(--muted); font-size: 11px; }
+
+/* 单选（分流模式） */
+.dradio {
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 7px 0; cursor: pointer;
+}
+.dradio input { margin-top: 3px; }
+.dradio > span { display: flex; flex-direction: column; font-size: 12.5px; }
+.dradio b { font-weight: 500; }
+.dradio small { color: var(--muted); font-size: 11px; }
+.dradio:hover b { color: var(--accent); }
+
+/* 底部操作行 */
+.drow { display: flex; align-items: center; gap: 10px; margin-top: auto; padding-top: 8px; }
+.linkbtn {
+  border: 0; background: transparent; padding: 2px 0;
+  color: var(--muted); font: inherit; font-size: 12px;
+  cursor: pointer; text-decoration: none;
+}
+.linkbtn:hover { color: var(--accent); }
+.drow .mini { padding: 4px 10px; font-size: 12px; }
+.dash-card .mini { padding: 3px 10px; font-size: 12px; }
+
+/* 节点延迟列表 */
+.dlat { display: flex; flex-direction: column; gap: 7px; flex: 1; }
+.dlat .muted { font-size: 12px; }
+.dlrow {
+  display: grid; grid-template-columns: minmax(0,1.6fr) minmax(0,1fr) 50px;
+  align-items: center; gap: 8px;
+  font-size: 12px; cursor: pointer;
+  padding: 2px 0;
+}
+.dlrow:hover .dlname { color: var(--accent); }
+.dlname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dlbar { height: 4px; border-radius: 999px; background: var(--card-2); overflow: hidden; }
+.dlbar i { display: block; height: 100%; background: var(--ok); border-radius: 999px; }
+.dlbar i.warn { background: var(--warn); }
+.dlbar i.bad { background: var(--bad); }
+.dlms { text-align: right; font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.dlrow.cur .dlname { color: var(--accent); font-weight: 600; }
+.dlrow.cur .dlms { color: var(--accent); }
+
+/* 订阅列表 */
+.dsubs { display: flex; flex-direction: column; gap: 9px; flex: 1; max-height: 168px; overflow-y: auto; }
+.dsubs .muted { font-size: 12px; }
+.dsub {
+  border: 1px solid var(--line); border-radius: 9px;
+  padding: 7px 10px; background: var(--card-2);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.dsub-name {
+  font-size: 12.5px; font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dsub-meta { font-size: 11px; color: var(--muted); display: flex; gap: 8px; }
