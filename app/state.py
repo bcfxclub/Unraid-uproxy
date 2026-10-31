@@ -54,7 +54,8 @@ class OutletCfg(BaseModel):
     # 被用户删除的节点 name 黑名单（订阅里还有，但不再出现在列表/配置里）
     sb_removed: list[str] = Field(default_factory=list)
 
-    # 多订阅源：{id,name,url,ua,proxy,enabled,updated_at,count}
+    # 多订阅源：{id,name,url,ua,proxy,enabled,updated_at,count,usage}
+    # usage 是机场在 subscription-userinfo 里给的 {used,total,expire}，没有就是空
     subscriptions: list[dict[str, Any]] = Field(default_factory=list)
 
     # 分流模式：auto(默认，国内外分流，保护局域网/国内镜像) / all(全部走代理) / custom(自定义)

@@ -485,6 +485,13 @@ table.data th { color: var(--muted); font-weight: 400; }
   background: rgba(127,127,127,.12); }
 .sc-url { margin-top: 8px; font-size: 11px; color: var(--muted); font-family: var(--mono);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 订阅流量：已用 / 总量 / 到期 + 细进度条（机场不给用量时都不出现） */
+.sc-use { margin-top: 8px; font-size: 11.5px; color: var(--text); opacity: .88; }
+.sc-bar {
+  height: 4px; border-radius: 999px; background: #2f2a20;
+  overflow: hidden; margin: 5px 0 2px; max-width: 320px;
+}
+.sc-bar i { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
 
 /* ---------------- ⋮ 三点菜单 ---------------- */
 .dots { flex: 0 0 auto; width: 24px; height: 22px; padding: 0; line-height: 1;
@@ -742,18 +749,34 @@ table.data th { color: var(--muted); font-weight: 400; }
 .dlrow.cur .dlms { color: var(--accent); }
 
 /* 订阅列表 */
-.dsubs { display: flex; flex-direction: column; gap: 9px; flex: 1; max-height: 168px; overflow-y: auto; }
+.dsubs { display: flex; flex-direction: column; gap: 9px; flex: 1; max-height: 236px; overflow-y: auto; }
 .dsubs .muted { font-size: 12px; }
 .dsub {
   border: 1px solid var(--line); border-radius: 9px;
-  padding: 7px 10px; background: var(--card-2);
-  display: flex; flex-direction: column; gap: 2px;
+  padding: 7px 8px 7px 10px; background: var(--card-2);
+  display: flex; align-items: flex-start; gap: 4px;
 }
+.dsub-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.dsub:hover { border-color: #4a4438; }
 .dsub-name {
   font-size: 12.5px; font-weight: 500;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.dsub-meta { font-size: 11px; color: var(--muted); display: flex; gap: 8px; }
+.dsub-meta { font-size: 11px; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; }
+.dsub-meta span { white-space: nowrap; }
+/* 已用 / 总量 / 到期：机场不给用量时整行都不出现；窄卡片自动折成两行 */
+.dsub-use {
+  font-size: 11px; color: var(--text); opacity: .85;
+  display: flex; flex-wrap: wrap; gap: 1px 10px;
+}
+.dsub-use span { white-space: nowrap; }
+/* 流量进度条：细，别抢主体内容的注意力 */
+.dsub-bar {
+  height: 4px; border-radius: 999px; background: #2f2a20;
+  overflow: hidden; margin: 3px 0 1px;
+}
+.dsub-bar i { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+.dsub .dots { width: 22px; height: 20px; font-size: 13px; }
 
 /* ============================================================
    代理组：分组胶囊、节点胶囊、分组菜单、编辑弹窗

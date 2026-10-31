@@ -630,6 +630,60 @@ async function shareSub(s) {
   await shareNodes(nodeNames);
 }
 
+/* 字节转成人看的单位（机场给的是字节，1 GiB = 1024^3） */
+function bytes2(n) {
+  n = Number(n) || 0;
+  const u = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return `${i === 0 ? Math.round(n) : n.toFixed(2)} ${u[i]}`;
+}
+
+function fmtExpire(ts) {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (x) => String(x).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/* 用量：已用 X / 总量，到期时间单独一段（窄卡片会自然折成两行） */
+function usageLine(u) {
+  const used = `已用 ${bytes2(u.used)} / ${u.total > 0 ? bytes2(u.total) : "不限量"}`;
+  const exp = fmtExpire(u.expire);
+  return exp ? `${used}　到期 ${exp}` : used;
+}
+
+function usageBar(u, cls) {
+  const bar = el("div", cls || "sc-bar");
+  const pct = Math.min(100, Math.max(1, Math.round((u.used / u.total) * 100)));
+  const fill = el("i", "");
+  fill.style.width = `${pct}%`;
+  bar.appendChild(fill);
+  bar.title = `已用 ${pct}%（${bytes2(u.used)} / ${bytes2(u.total)}）`;
+  return bar;
+}
+
+/* 「2026-10-31 15:50」-> 「7 小时前」：卡片窄，相对时间比完整时间戳省地方 */
+function relTime(s) {
+  if (!s) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(String(s).trim());
+  if (!m) return String(s);
+  const then = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime();
+  const mins = Math.floor((Date.now() - then) / 60000);
+  if (mins < 0) return `${m[2]}-${m[3]} ${m[4]}:${m[5]}`;
+  if (mins < 1) return "刚刚";
+  if (mins < 60) return `${mins} 分钟前`;
+  if (mins < 60 * 24) return `${Math.floor(mins / 60)} 小时前`;
+  if (mins < 60 * 24 * 7) return `${Math.floor(mins / 1440)} 天前`;
+  return `${m[2]}-${m[3]} ${m[4]}:${m[5]}`;
+}
+
+function hasUsage(s) {
+  const u = s.usage || {};
+  return u.total > 0 || u.used > 0 || u.expire > 0;
+}
+
 function renderSubList(subs) {
   const box = $("#subList");
   clear(box);
@@ -674,6 +728,12 @@ function renderSubList(subs) {
     meta.appendChild(el("span", "sc-badge mono", s.updated_at || "未更新"));
     if (s.enabled === false) meta.appendChild(pill("已停用", "bad"));
     card.appendChild(meta);
+
+    // 流量用量：机场在订阅响应头里给了才显示，没给就整行不出现
+    if (hasUsage(s)) {
+      card.appendChild(el("div", "sc-use mono", usageLine(s.usage)));
+      if (s.usage.total > 0) card.appendChild(usageBar(s.usage));
+    }
 
     const url = (s.url || "").startsWith("local://") ? "本地粘贴" : (s.url || "");
     card.appendChild(el("div", "sc-url", url));
@@ -2766,12 +2826,35 @@ const Dash = (function () {
     }
     subs.slice(0, 4).forEach((s) => {
       const d = el("div", "dsub");
-      d.appendChild(el("div", "dsub-name", s.name || s.url || "未命名订阅"));
+      const main = el("div", "dsub-main");
+      main.appendChild(el("div", "dsub-name", s.name || s.url || "未命名订阅"));
+
+      // 流量用量：机场在订阅响应头里给了才显示，没给就整行不出现
+      if (hasUsage(s)) {
+        const use = el("div", "dsub-use mono");
+        use.appendChild(el("span", "", `已用 ${bytes2(s.usage.used)} / ${s.usage.total > 0 ? bytes2(s.usage.total) : "不限量"}`));
+        const exp = fmtExpire(s.usage.expire);
+        if (exp) use.appendChild(el("span", "", `到期 ${exp}`));
+        main.appendChild(use);
+        if (s.usage.total > 0) main.appendChild(usageBar(s.usage, "dsub-bar"));
+      }
+
       const meta = el("div", "dsub-meta");
       meta.appendChild(el("span", "", `${s.count || 0} 节点`));
-      meta.appendChild(el("span", "", s.updated_at ? `更新于 ${s.updated_at}` : "还没更新过"));
+      meta.appendChild(el("span", "", s.updated_at ? `更新于 ${relTime(s.updated_at)}` : "还没更新过"));
       if (s.enabled === false) meta.appendChild(el("span", "", "已停用"));
-      d.appendChild(meta);
+      main.appendChild(meta);
+      d.appendChild(main);
+
+      // ⋮ 菜单：跟「订阅」页同一批动作，首页不用跳过去就能更新 / 改名 / 分享 / 删除
+      d.appendChild(dotsBtn((btn) => Pop.toggle(btn, [
+        { label: "更新", onClick: () => safe(() => updateSubs([subKey(s)]), "更新订阅") },
+        { label: "修改", onClick: () => safe(() => editSub(s), "修改订阅") },
+        { label: "分享", onClick: () => safe(() => shareSub(s), "分享订阅") },
+        { sep: true },
+        { label: "删除", danger: true, onClick: () => safe(() => delSubs([subKey(s)], subTitle(s)), "删除订阅") },
+      ])));
+
       box.appendChild(d);
     });
   }

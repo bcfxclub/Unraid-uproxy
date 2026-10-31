@@ -602,6 +602,9 @@ def _resync(cfg: st.AppCfg) -> dict:
             sub["count"] = s.get("count", 0)
             if s.get("ok"):
                 sub["updated_at"] = now
+                # 用量/到期只有机场给了才更新；这次没给就留着上次的，别把显示抹掉
+                if s.get("usage"):
+                    sub["usage"] = s["usage"]
     # 清掉已不存在于新节点集的默认节点引用
     names = {n["name"] for n in res["nodes"]}
     if cfg.outlet.sb_node and cfg.outlet.sb_node not in names:

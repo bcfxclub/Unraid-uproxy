@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import urllib.parse
 
@@ -54,6 +55,55 @@ def _classify(err: str) -> str:
     if "redirect" in e:
         return "重定向异常：订阅地址被跳转，请确认完整链接。"
     return f"抓取失败：{err[:300]}"
+
+
+def parse_userinfo(text: str) -> dict:
+    """解析订阅响应头 subscription-userinfo，得到流量用量。
+
+    机场普遍按 ``upload=1; download=2; total=100; expire=1730000000`` 的格式给，
+    v2rayA / clash 系客户端显示的就是这几个数。拿不到或全是 0 时返回 {}，
+    前端据此决定要不要显示这一行（不显示比显示 0 更不误导）。
+    """
+    val = ""
+    for line in (text or "").splitlines():
+        if line.lower().startswith("subscription-userinfo:"):
+            val = line.split(":", 1)[1].strip()   # 多次重定向时以最后一次为准
+    if not val:
+        return {}
+    got: dict[str, int] = {}
+    for part in val.split(";"):
+        if "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        try:
+            got[k.strip().lower()] = int(float(v.strip()))
+        except ValueError:
+            continue
+    used = got.get("upload", 0) + got.get("download", 0)
+    total = got.get("total", 0)
+    expire = got.get("expire", 0)
+    if total <= 0 and used <= 0 and expire <= 0:
+        return {}
+    return {"used": max(0, used), "total": max(0, total), "expire": max(0, expire)}
+
+
+def usage_of(url: str, ua: str = "clash.meta", proxy: str = "", timeout: int = 15) -> dict:
+    """单独取一次响应头读用量：正文丢弃，失败就返回 {}。
+
+    不复用 ``fetch``（那条路径带重试和正文解析），这里只关心头部，别影响主流程。
+    """
+    if not url or url.startswith("local://"):
+        return {}
+    argv = ["curl", "-sSL", "--http1.1", "--connect-timeout", "8",
+            "--max-time", str(timeout), "-A", ua or "clash.meta",
+            "-D", "-", "-o", os.devnull]
+    if proxy:
+        argv += ["-x", proxy]
+    argv.append(url)
+    r = host.run(argv, timeout=timeout + 6)
+    if r["rc"] != 0:
+        return {}
+    return parse_userinfo(r["out"])
 
 
 def fetch(url: str, ua: str = "clash.meta", timeout: int = 30, proxy: str = "",
@@ -520,7 +570,8 @@ def sync_subscriptions(subscriptions: list[dict], ua: str = "clash.meta",
         any_ok = True
         summary.append({"name": sub.get("name", ""), "url": url, "ok": True,
                         "message": parsed["message"], "count": len(parsed["nodes"]),
-                        "attempt": got.get("attempt", 1)})
+                        "attempt": got.get("attempt", 1),
+                        "usage": usage_of(url, sub.get("ua") or ua, proxy=sub.get("proxy") or "")})
     nodes = _dedupe(merged)
     return {
         "ok": any_ok,
