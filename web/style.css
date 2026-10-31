@@ -898,15 +898,14 @@ table.data th { color: var(--muted); font-weight: 400; }
   background: var(--bg); scrollbar-gutter: stable;
 }
 .ged-item {
-  display: flex; align-items: center; gap: 8px;
   padding: 5px 7px; border-radius: 7px; cursor: pointer;
   font-size: 12.5px;
 }
 .ged-item:hover { background: var(--card-2); }
 .ged-item input { margin: 0; }
-.ged-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ged-type { font-size: 11px; color: var(--muted); font-family: var(--mono); flex: 0 0 auto; }
-/* label 是 flex，默认的 [hidden] 会被 display:flex 盖掉，必须显式隐藏 */
+.ged-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ged-type { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+/* label 是 grid，默认的 [hidden] 会被 display:grid 盖掉，必须显式隐藏 */
 .ged-item[hidden] { display: none !important; }
 
 /* 分组编辑弹窗的工具栏：筛选独占一行，下面是已选计数 + 批量按钮 */
@@ -1012,6 +1011,25 @@ table.data th { color: var(--muted); font-weight: 400; }
   border-left: 1px solid var(--line);
 }
 .modal.geditor { max-width: 500px; }
+
+/* 列表列头：与 .ged-item 同一套网格，常驻在列表顶部，让两列数字（TCP / URL）
+   一眼就知道对应哪一列，不再和上方工具栏的「TCP / URL」测速芯片混淆 */
+.ged-head {
+  position: sticky; top: 0; z-index: 2;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 54px 54px 52px;
+  align-items: center; gap: 8px;
+  padding: 5px 7px; margin-bottom: 2px;
+  font-size: 10.5px; color: var(--muted); letter-spacing: .3px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+.ged-head .h-tcp, .ged-head .h-url { text-align: right; }
+.ged-head .h-type {
+  text-align: right; padding-left: 8px;
+  border-left: 1px solid var(--line);
+}
+.ged-head .h-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* TCP / URL 测速胶囊：点一下就地测这批节点，选中的那个高亮 */
 .ged-mode {

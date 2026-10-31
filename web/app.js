@@ -108,6 +108,20 @@ async function api(path, method = "GET", body) {
   return data;
 }
 
+/* 与 api 类似，但 ok:false 不算错误：预检/状态这类「信息性」结果即使 ok 为否也要照常渲染。
+   只在 401（会话失效）或网络层失败时抛错，交给 safe 提示。 */
+async function apiRaw(path, method = "GET", body) {
+  let r = await fetch(path, _opt(method, body));
+  if (r.status === 401) {
+    setSession("");
+    showLogin("会话已失效，请重新登录");
+    throw new Error("未登录");
+  }
+  let data = null;
+  try { data = await r.json(); } catch (e) { data = { ok: false, message: "响应不是 JSON" }; }
+  return data;
+}
+
 async function safe(fn, label) {
   try { await fn(); } catch (e) { toast(`${label || "操作"}失败：${e.message}`); }
 }
@@ -577,8 +591,16 @@ $("#btnProbe").addEventListener("click", () => safe(async () => {
 
 /* ---------------- WARP ---------------- */
 async function warp(action) {
-  const d = await api("/api/outlet/warp", "POST", { action });
   const out = $("#warpOut");
+  if (out) { clear(out); out.appendChild(el("div", "hint", "正在请求…")); }
+  let d;
+  try {
+    d = await apiRaw("/api/outlet/warp", "POST", { action });
+  } catch (e) {
+    if (out) { clear(out); out.appendChild(el("div", "hint bad", `请求失败：${e.message}`)); }
+    return null;
+  }
+  if (!out) return d;
   clear(out);
   if (action === "test") {
     out.appendChild(pill(d.warp === "on" ? "WARP 已生效" : `warp=${d.warp}`, d.warp === "on" ? "ok" : "warn"));
@@ -590,6 +612,7 @@ async function warp(action) {
   } else if (action === "precheck") {
     out.appendChild(pill(d.ok ? "WARP 可用" : "不建议用 WARP", d.ok ? "ok" : "warn"));
     out.appendChild(el("div", "", d.verdict || ""));
+    if (d.nodocker) out.appendChild(el("div", "hint", "（本环境没有 docker，仅做网络层预检；真正启动仍需要 Unraid + Docker）"));
     if (d.suggested_ip) {
       const b = el("button", "", `填入接入点 ${d.suggested_ip}`);
       b.addEventListener("click", () => {
@@ -608,6 +631,7 @@ async function warp(action) {
   } else {
     out.appendChild(pill(d.ok ? "成功" : "失败", d.ok ? "ok" : "bad"));
     out.appendChild(el("div", "", d.message || ""));
+    if (d.nodocker) out.appendChild(el("div", "hint", "本环境没有 docker 命令行，无法在本地启动容器；规则已保存，部署到 Unraid 后重启出口即可生效。"));
   }
   return d;
 }
@@ -1280,8 +1304,8 @@ function sortNodesByDelay() {
   if (!before.length) return false;
   const idx = new Map(before.map((n, i) => [n, i]));
   nodeCache = nodeCache.slice().sort((a, b) => {
-    const ra = delayMap[a.name] || null;
-    const rb = delayMap[b.name] || null;
+    const ra = latOf(a.name, "tcp") || null;
+    const rb = latOf(b.name, "tcp") || null;
     const ka = delayRank(ra), kb = delayRank(rb);
     if (ka !== kb) return ka - kb;              // 有耗时的整体排在失败前面
     if (ka === 0 && ra.ms !== rb.ms) return ra.ms - rb.ms;  // 同组内按延迟升序
@@ -1391,7 +1415,9 @@ async function runNodeTest(names, mode, url, opts) {
    只测「当前代理组」——首页「节点延迟」卡片展示的就是这一组；
    和手动测速一样按延迟重排并保存，顺序永远反映最近一次结果。 */
 function autoTcpProbe() {
-  const list = groupNodes();
+  // 启动后给「全部存活节点」做一次 TCP 握手测速，这样订阅页/节点页的每一张卡都有延迟，
+  // 而不是只测当前分组（以前只测当前分组，导致其它节点卡片永远不显示延迟）。
+  const list = aliveNodes();
   if (!list.length) return;
   runNodeTest(list.map((n) => n.name), "tcp", null, { silent: true, sort: true }).catch(() => {});
 }
@@ -1532,7 +1558,7 @@ function renderNodeGrid() {
     card.appendChild(meta);
     card.appendChild(el("div", "nc-addr", `${n.server}:${n.port}`));
 
-    const d = delayMap[n.name];
+    const d = latOf(n.name, "tcp");
     const delayEl = el("span", d ? `nc-delay ${delayKind(d)}` : "nc-delay", delayText(d));
     delayEl.title = delayTitle(d);
     card.appendChild(delayEl);
@@ -1594,7 +1620,7 @@ function renderNodeTable(nodes, sbNode) {
 
     const tTd = el("td", "", "—");
     tTd.setAttribute("data-name", n.name);
-    const d = delayMap[n.name];
+    const d = latOf(n.name, "tcp");
     if (d) {
       tTd.textContent = "";
       const p = pill(delayText(d), delayKind(d));
@@ -2447,7 +2473,7 @@ function groupNodes() {
 function groupBest() {
   let best = null;
   groupNodes().forEach((n) => {
-    const r = delayMap[n.name];
+    const r = latOf(n.name, "tcp");
     if (!r || !r.reachable || r.ms === null || r.ms === undefined) return;
     if (!best || r.ms < best.r.ms) best = { n, r };
   });
@@ -2896,6 +2922,14 @@ const Dash = (function () {
     }
 
     const list = el("div", "ged-list");
+    // 列头：与下面每一行的 5 列网格完全对齐（勾选 | 节点 | TCP | URL | 协议）
+    const head = el("div", "ged-head");
+    head.appendChild(el("span", "h-check"));
+    head.appendChild(el("span", "h-name", "节点"));
+    head.appendChild(el("span", "h-tcp", "TCP"));
+    head.appendChild(el("span", "h-url", "URL"));
+    head.appendChild(el("span", "h-type", "协议"));
+    list.appendChild(head);
     const rows = [];
     all.forEach((n) => {
       const lab = el("label", "ged-item");
@@ -3214,8 +3248,8 @@ const Dash = (function () {
       box.appendChild(el("div", "muted", "当前分组没有节点，用上面的「编辑分组」勾几个进来。"));
       return;
     }
-    // 排序用 TCP（进页面自动跑的就是它）；没有 TCP 时退到任意一次结果
-    const keyOf = (n) => latOf(n.name, "tcp") || delayMap[n.name] || null;
+    // 排序与显示统一用 TCP（进页面自动跑的就是它，且覆盖全部节点）
+    const keyOf = (n) => latOf(n.name, "tcp");
     const measured = list.filter((n) => {
       const r = keyOf(n);
       return r && r.reachable && r.ms !== null && r.ms !== undefined;

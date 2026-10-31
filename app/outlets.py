@@ -68,6 +68,9 @@ def _status(name: str) -> dict:
 # WARP
 # --------------------------------------------------------------------------
 def warp_start(cfg: st.AppCfg) -> dict:
+    if not docker_available():
+        return {"ok": False, "nodocker": True,
+                "message": "当前环境没有 docker 命令行（本程序需在 Unraid / Linux + Docker 上运行），无法启动 WARP 容器"}
     _ensure_net()
     host.docker("rm", "-f", WARP_NAME, timeout=30)
     port = cfg.outlet.warp_port
@@ -99,8 +102,11 @@ def warp_start(cfg: st.AppCfg) -> dict:
 
 
 def warp_stop() -> dict:
+    if not docker_available():
+        return {"ok": False, "nodocker": True,
+                "message": "当前环境没有 docker 命令行，无法操作 WARP 容器"}
     r = host.docker("rm", "-f", WARP_NAME, timeout=60)
-    return {"ok": r["rc"] == 0, "message": "已移除 WARP 容器" if r["rc"] == 0 else (r["err"] or "")[:400]}
+    return {"ok": r["rc"] == 0, "message": "已移除 WARP container" if r["rc"] == 0 else (r["err"] or "")[:400]}
 
 
 def warp_status(cfg: st.AppCfg) -> dict:
