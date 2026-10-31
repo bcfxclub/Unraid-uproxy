@@ -475,3 +475,51 @@ def test_nodes(nodes: list[dict], timeout: float = 3.0) -> list[dict]:
         res = list(ex.map(lambda n: _tcp_ping(n, timeout), nodes))
     res.sort(key=lambda x: (not x["reachable"], x["ms"] if x["ms"] is not None else 999999))
     return res
+
+
+def sync_subscriptions(subscriptions: list[dict], ua: str = "clash.meta") -> dict:
+    """拉取并合并所有「启用」的订阅源。
+
+    返回 {ok, nodes, summary, unsupported}。单个源失败不影响其他源，
+    summary 里逐条标注每个源的结果，便于前端展示。
+    """
+    summary: list[dict] = []
+    merged: list[dict] = []
+    unsupported: set[str] = set()
+    any_ok = False
+    for sub in subscriptions:
+        if not sub.get("enabled", True):
+            summary.append({"name": sub.get("name", ""), "url": sub.get("url", ""),
+                            "ok": None, "message": "已禁用", "count": 0})
+            continue
+        url = (sub.get("url") or "").strip()
+        if not url:
+            summary.append({"name": sub.get("name", ""), "url": "", "ok": False,
+                            "message": "地址为空", "count": 0})
+            continue
+        got = fetch(url, sub.get("ua") or ua, proxy=sub.get("proxy") or "", retries=3)
+        if not got["ok"]:
+            summary.append({"name": sub.get("name", ""), "url": url, "ok": False,
+                            "message": got["message"], "count": 0,
+                            "http_code": got.get("http_code", "")})
+            continue
+        parsed = parse(got["raw"])
+        source_name = sub.get("name") or url
+        # 给本订阅所有节点打上来源标记，前端按订阅分组/过滤
+        for n in parsed["nodes"]:
+            n["source"] = source_name
+        merged += parsed["nodes"]
+        unsupported.update(parsed["unsupported"])
+        any_ok = True
+        summary.append({"name": sub.get("name", ""), "url": url, "ok": True,
+                        "message": parsed["message"], "count": len(parsed["nodes"]),
+                        "attempt": got.get("attempt", 1)})
+    nodes = _dedupe(merged)
+    return {
+        "ok": any_ok,
+        "nodes": nodes,
+        "summary": summary,
+        "unsupported": sorted(unsupported),
+        "message": f"合并 {len(nodes)} 个节点（来自 {sum(1 for s in summary if s.get('ok'))} 个可用订阅）",
+    }
+

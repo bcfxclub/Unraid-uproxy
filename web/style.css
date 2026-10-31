@@ -322,6 +322,72 @@ table.data th { color: var(--muted); font-weight: 400; }
 .tstat b.dn { color: var(--ok); }
 .tstat b.up { color: var(--accent); }
 .tchart { width: 100%; height: 160px; display: block; }
+.tnodes { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.tnodes .muted { font-size: 12px; color: var(--muted); }
+.nchip { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: rgba(230,182,79,0.12);
+  border: 1px solid rgba(230,182,79,0.3); color: var(--accent); font-family: var(--mono); }
+
+/* ---------------- 节点网格卡片（v2rayA 风格） ---------------- */
+.nodegrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; }
+.node-card {
+  position: relative;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 12px 10px;
+  cursor: pointer;
+  transition: border-color .15s, transform .05s, background .15s;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.node-card:hover { border-color: var(--muted); }
+.node-card.active { border-color: var(--accent); background: rgba(230,182,79,0.06); }
+.node-card.off { opacity: 0.45; }
+.nc-head { display: flex; align-items: center; gap: 8px; }
+.nc-head input[type=checkbox] { flex: 0 0 auto; width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+.nc-name { font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nc-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.nc-type, .nc-src { font-size: 11px; padding: 1px 7px; border-radius: 6px; background: var(--card-2); color: var(--muted); }
+.nc-src { color: var(--accent); background: rgba(230,182,79,0.10); }
+.nc-addr { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+.nc-delay { font-size: 13px; font-family: var(--mono); color: var(--muted); }
+.nc-delay.ok { color: var(--ok); }
+.nc-delay.warn { color: var(--warn); }
+.nc-delay.bad { color: var(--bad); }
+.name-edit {
+  width: 100%; background: transparent; border: none; border-bottom: 1px dashed transparent;
+  color: var(--text); font-size: 13px; padding: 2px 0; font-family: var(--font);
+}
+.name-edit:hover, .name-edit:focus { border-bottom-color: var(--accent); outline: none; }
+
+/* ---------------- 日志页 ---------------- */
+.logcard { display: flex; flex-direction: column; }
+.logtabs { gap: 6px; margin-bottom: 10px; }
+.logtabs .lv {
+  background: var(--card-2); color: var(--muted); border: 1px solid var(--line);
+  padding: 5px 12px; border-radius: 999px; font-size: 12px; cursor: pointer;
+}
+.logtabs .lv.on { background: var(--accent); color: #1a1206; border-color: var(--accent); font-weight: 600; }
+.logbar { gap: 8px; margin-bottom: 10px; }
+.logbody {
+  background: #0a0906;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  height: 420px; overflow: auto; padding: 8px 10px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.7;
+}
+.logline { display: flex; gap: 8px; padding: 1px 4px; border-radius: 4px; white-space: nowrap; }
+.logline:hover { background: rgba(255,255,255,0.04); }
+.logline .lt { color: var(--muted); flex: 0 0 138px; }
+.logline .ls { color: var(--accent); flex: 0 0 80px; overflow: hidden; text-overflow: ellipsis; }
+.logline .lm { color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+.logline.lv-error .lm { color: var(--bad); }
+.logline.lv-warn .lm { color: var(--warn); }
+.lv { font-size: 10px; padding: 1px 6px; border-radius: 5px; flex: 0 0 auto; align-self: center;
+  font-weight: 700; letter-spacing: .5px; }
+.lv-lv-info { background: var(--ok-soft); color: var(--ok); }
+.lv-lv-error { background: var(--bad-soft); color: var(--bad); }
+.lv-lv-warn { background: var(--warn-soft); color: var(--warn); }
+.lv-lv-debug, .lv-lv-trace { background: var(--card-2); color: var(--muted); }
 
 /* ---------------- 登录遮罩 ---------------- */
 .login {

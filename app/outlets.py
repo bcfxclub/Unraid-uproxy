@@ -273,30 +273,98 @@ def warp_precheck(cfg: st.AppCfg) -> dict:
 # --------------------------------------------------------------------------
 # sing-box（订阅选路后的出口）
 # --------------------------------------------------------------------------
+# 出网加速默认要代理的目标域名（docker 镜像 / GitHub / 常见开发源）。
+# 这些域名在「智能分流(auto)」模式下会被强制走节点；其余默认直连，保护国内镜像与局域网。
+BUILTIN_PROXY_SUFFIX = [
+    "docker.io", "registry-1.docker.io", "ghcr.io", "quay.io", "gcr.io",
+    "registry.k8s.io", "k8s.gcr.io", "github.com", "githubusercontent.com",
+    "objects.githubusercontent.com", "raw.githubusercontent.com",
+    "codeload.github.com", "proxy.golang.org", "sum.golang.org", "pypi.org",
+    "registry.npmjs.org", "npmjs.org", "nuget.org", "crates.io",
+    "releases.hashicorp.com", "download.docker.com", "cloudflareclient.com",
+]
+# 国内直连后缀（仅用于 auto 模式的「直连优先」提示，最终兜底仍是 final=direct）
+BUILTIN_DIRECT_SUFFIX = [".cn", ".com.cn", ".中国", ".公司", ".网络"]
+
+
+def _route_block(cfg: st.AppCfg) -> dict:
+    """按分流模式生成 sing-box route 块（sing-box 1.x 语法，用 outbound 指向出站）。
+
+    auto（默认，安全）：私有网段 / 局域网直连；内置目标域名 + 用户指定域名走代理；
+                      其余一律直连（final=direct），避免把国内流量也代理导致断网。
+    all：除私有网段外，全部走代理（final=select）。谨慎使用。
+    custom：仅按用户填写的 sb_direct / sb_proxy 规则分流，兜底直连。
+    """
+    mode = cfg.outlet.sb_route or "auto"
+    rules: list[dict] = []
+    # DNS 与局域网永远直连，防止路由死循环 / 断局域网
+    rules.append({"outbound": "direct", "protocol": "dns"})
+    rules.append({"outbound": "direct", "ip_is_private": True})
+
+    if mode == "all":
+        # 仅当明确选「全部代理」时，把所有非私有流量交给 selector
+        return {"rules": rules, "final": "select", "auto_detect_interface": True}
+
+    # auto / custom 共用：用户显式指定的直连域名始终直连
+    if cfg.outlet.sb_direct:
+        rules.append({"outbound": "direct",
+                      "domain_suffix": list(cfg.outlet.sb_direct)})
+
+    # 需要走代理的域名
+    proxy_domains = list(cfg.outlet.sb_proxy)
+    if mode == "auto":
+        proxy_domains = BUILTIN_PROXY_SUFFIX + proxy_domains
+    if proxy_domains:
+        rules.append({"outbound": "select", "domain_suffix": proxy_domains})
+
+    # 兜底：auto/custom 默认直连（最安全）
+    return {"rules": rules, "final": "direct", "auto_detect_interface": True}
+
+
 def _sb_config(cfg: st.AppCfg) -> dict:
-    nodes = [n for n in cfg.outlet.sb_nodes if n.get("outbound")]
+    disabled = set(cfg.outlet.sb_disabled or [])
+    nodes = [n for n in cfg.outlet.sb_nodes
+             if n.get("outbound") and n.get("name") not in disabled]
     if not nodes:
-        raise ValueError("没有可用节点，请先拉取订阅并选择节点")
+        raise ValueError("没有可用节点，请先拉取订阅并选择节点（或启用被停用的节点）")
     # 节点字典只暴露 name/type/server/port/outbound，没有顶层「tag」；
     # 选择器需要的是出站 tag，与 name 同一值（_dedupe 已保证唯一）。
     tags = [n["name"] for n in nodes]
     selected = cfg.outlet.sb_node if cfg.outlet.sb_node in tags else tags[0]
-    return {
+
+    inbounds = [{
+        "type": "mixed",
+        "tag": "mixed-in",
+        "listen": "0.0.0.0",
+        "listen_port": cfg.outlet.sb_port,
+    }]
+    if cfg.outlet.sb_tun:
+        inbounds.insert(0, {
+            "type": "tun",
+            "tag": "tun-in",
+            "interface_name": "tun0",
+            "inet4_address": "172.19.0.1/30",
+            "auto_route": True,
+            "strict_route": True,
+            "stack": "system",
+        })
+
+    conf: dict = {
         "log": {"level": "warn"},
         # 原生 api：供 WebUI 拉取实时连接数（只在 uproxy-net 内可达，不暴露到宿主）
         "api": {"listen": "0.0.0.0:9099", "token": "uproxy"},
-        "inbounds": [{
-            "type": "mixed",
-            "tag": "mixed-in",
-            "listen": "0.0.0.0",
-            "listen_port": cfg.outlet.sb_port,
-        }],
+        # 解析走公共 DNS 直连，避免路由死循环
+        "dns": {"servers": [{"address": "223.5.5.5"}, {"address": "119.29.11.11"}],
+                "final": "223.5.5.5"},
+        "inbounds": inbounds,
         "outbounds": [
             {"type": "selector", "tag": "select", "outbounds": tags, "default": selected},
             *[n["outbound"] for n in nodes],
             {"type": "direct", "tag": "direct"},
         ],
+        "route": _route_block(cfg),
     }
+    return conf
 
 
 def sb_start(cfg: st.AppCfg) -> dict:
@@ -308,14 +376,20 @@ def sb_start(cfg: st.AppCfg) -> dict:
         json.dump(conf, f, ensure_ascii=False, indent=2)
 
     host.docker("rm", "-f", SB_NAME, timeout=30)
-    r = host.docker(
+    args = [
         "run", "-d", "--name", SB_NAME, "--restart", "unless-stopped",
         "--network", NET,
         "-v", f"{SB_CONF_DIR}:/etc/sing-box",
+    ]
+    if cfg.outlet.sb_tun:
+        # TUN 透明代理需要内核 tun 设备与网络管理权限
+        args += ["--cap-add", "NET_ADMIN", "--device", "/dev/net/tun",
+                 "--sysctl", "net.ipv4.ip_forward=1"]
+    args += [
         cfg.outlet.sb_image,
         "-c", "/etc/sing-box/config.json", "run",
-        timeout=180,
-    )
+    ]
+    r = host.docker(*args, timeout=180)
     if r["rc"] != 0:
         return {"ok": False, "message": (r["err"] or r["out"] or "启动失败")[:800]}
     return {"ok": True, "message": "sing-box 出口已启动",

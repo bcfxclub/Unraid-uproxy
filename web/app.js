@@ -202,7 +202,6 @@ function renderConfig(c) {
   $("#inWarpImage").value = c.outlet.warp_image || "";
   $("#inWarpEndpointIp").value = c.outlet.warp_endpoint_ip || "";
   $("#inSbPort").value = c.outlet.sb_port || 7890;
-  $("#inSubUrl").value = c.outlet.sub_url || "";
   $("#inMirrors").value = (c.mirrors || []).join("\n");
   $("#inNoProxy").value = c.no_proxy || "";
   $("#t-dockerd").checked = !!c.targets.dockerd;
@@ -212,6 +211,7 @@ function renderConfig(c) {
   $("#allowRestart").checked = !!c.allow_restart_docker;
   $("#emhttpProxy").checked = !!c.emhttp_proxy;
 
+  // 出口页的下拉（保留）
   const sel = $("#selNode");
   clear(sel);
   (c.outlet.sb_nodes || []).forEach((n) => {
@@ -220,7 +220,11 @@ function renderConfig(c) {
     sel.appendChild(o);
   });
   if (c.outlet.sb_node) sel.value = c.outlet.sb_node;
-  renderNodeList(c.outlet.sb_nodes || []);
+
+  // 订阅源列表 + 节点管理 + 分流设置
+  renderSubList(c.outlet.subscriptions || []);
+  renderNodes();
+  applyRouteUI(c.outlet);
 }
 
 async function loadState() {
@@ -348,71 +352,327 @@ $("#btnWarpPrecheck").addEventListener("click", () => safe(() => warp("precheck"
 $("#btnWarpTest").addEventListener("click", () => safe(() => warp("test"), "验证 WARP"));
 $("#btnWarpStatus").addEventListener("click", () => safe(() => warp("status"), "查询状态"));
 
-/* ---------------- 订阅 ---------------- */
-function renderNodeList(nodes) {
-  const box = $("#nodeList");
+/* ---------------- 订阅源管理 ---------------- */
+function renderSubList(subs) {
+  const box = $("#subList");
   clear(box);
-  if (!(nodes || []).length) { box.appendChild(el("div", "hint", "暂无节点。拉取订阅后这里会列出可选出口。")); return; }
+  if (!subs.length) { box.appendChild(el("div", "hint", "还没有订阅源。在下面粘贴地址添加，可添加多个并存。")); return; }
   const table = el("table", "data");
   const tr = el("tr");
-  ["节点", "协议", "地址"].forEach((h) => tr.appendChild(el("th", "", h)));
+  ["备注", "地址", "节点", "更新时间", "启用", "操作"].forEach((h) => tr.appendChild(el("th", "", h)));
   table.appendChild(tr);
-  nodes.forEach((n) => {
+  subs.forEach((s) => {
     const row = el("tr");
-    row.appendChild(el("td", "", n.name));
-    row.appendChild(el("td")).appendChild(pill(n.type, "mute"));
-    row.appendChild(el("td", "mono", `${n.server}:${n.port}`));
+    row.appendChild(el("td", "", s.name || s.url));
+    row.appendChild(el("td", "mono", s.url));
+    row.appendChild(el("td", "", String(s.count || 0)));
+    row.appendChild(el("td", "mono", s.updated_at || "-"));
+    const enTd = el("td");
+    const en = el("input"); en.type = "checkbox"; en.checked = !!s.enabled;
+    en.addEventListener("change", () => safe(async () => {
+      const d = await api("/api/subs/update", "POST", { id: s.id, enabled: en.checked });
+      toast(d.message); loadState();
+    }, "切换启用"));
+    enTd.appendChild(en); row.appendChild(enTd);
+    const opTd = el("td");
+    const up = el("button", "", "更新"); up.className = "mini";
+    up.addEventListener("click", () => safe(async () => {
+      const d = await api("/api/subs/update", "POST", { id: s.id });
+      toast(d.message); loadState();
+    }, "更新订阅"));
+    const del = el("button", "", "删除"); del.className = "mini bad";
+    del.addEventListener("click", () => safe(async () => {
+      await api("/api/subs/del", "POST", { id: s.id });
+      toast("已删除订阅"); loadState();
+    }, "删除订阅"));
+    opTd.appendChild(up); opTd.appendChild(del); row.appendChild(opTd);
     table.appendChild(row);
   });
   box.appendChild(table);
-  box.appendChild(el("div", "hint", "选好节点后到「出口」页选它并启动 sing-box。"));
 }
 
-$("#btnSubFetch").addEventListener("click", () => safe(async () => {
+/* ---------------- 节点管理（v2rayA 风格：网格卡片 + 来源分组 + 搜索 + 延迟） ---------------- */
+const nodeState = {
+  source: "",        // 当前来源筛选（""=全部）
+  q: "",             // 搜索关键词
+  view: "grid",     // grid | list
+  lastSeq: 0,       // 日志增量拉取游标
+};
+let nodeCache = [];   // 当前节点全集（含 source）
+let delayMap = {};    // name -> {ms, reachable} 缓存测速结果
+
+function nodeSources() {
+  const set = new Set(nodeCache.map((n) => n.source).filter(Boolean));
+  return Array.from(set).sort();
+}
+
+function refreshSourceSel() {
+  const sel = $("#nodeSource");
+  const cur = sel.value || nodeState.source;
+  const sources = nodeSources();
+  sel.innerHTML = "";
+  const all = el("option", "", "全部");
+  all.value = "";
+  sel.appendChild(all);
+  sources.forEach((s) => sel.appendChild(el("option", "", s)));
+  sel.value = cur && sources.includes(cur) ? cur : "";
+  nodeState.source = sel.value;
+}
+
+function filterNodes() {
+  const q = nodeState.q.trim().toLowerCase();
+  return nodeCache.filter((n) => {
+    if (nodeState.source && n.source !== nodeState.source) return false;
+    if (!q) return true;
+    const hay = `${n.name} ${n.type} ${n.server} ${n.port}`.toLowerCase();
+    return hay.includes(q);
+  });
+}
+
+function syncSelCount() {
+  const dis = new Set(...STATE?.config?.outlet?.sb_disabled || []);
+  const selCount = nodeCache.filter((n) => !dis.has(n.name)).length;
+  $("#nodeSelCount").textContent = nodeCache.length ? `已选 ${selCount}/${nodeCache.length} 项` : "";
+}
+
+function renderNodeGrid() {
+  const box = $("#nodeGrid");
+  clear(box);
+  const items = filterNodes();
+  if (!items.length) {
+    box.appendChild(el("div", "hint", nodeCache.length ? "无匹配节点" : "暂无节点，请先在上方添加订阅并拉取。"));
+    return;
+  }
+  const dis = new Set(...(STATE?.config?.outlet?.sb_disabled || []));
+  const defaultNode = STATE?.config?.outlet?.sb_node || "";
+  items.forEach((n) => {
+    const card = el("div", "node-card");
+    const disabled = dis.has(n.name);
+    if (disabled) card.classList.add("off");
+    if (defaultNode === n.name) card.classList.add("active");
+    const chk = el("input"); chk.type = "checkbox"; chk.checked = !disabled;
+    const head = el("div", "nc-head");
+    head.appendChild(chk);
+    head.appendChild(el("div", "nc-name", n.name));
+    const meta = el("div", "nc-meta");
+    meta.appendChild(el("span", "nc-type", n.type));
+    meta.appendChild(el("span", "nc-src", n.source || "本地"));
+    meta.appendChild(el("span", "nc-addr", `${n.server}:${n.port}`));
+    card.appendChild(head);
+    card.appendChild(meta);
+    const d = delayMap[n.name];
+    let delayEl;
+    if (!d) {
+      delayEl = el("span", "nc-delay", "—");
+    } else if (d.reachable) {
+      delayEl = el("span", `nc-delay ${d.ms < 300 ? "ok" : "warn"}`, `${d.ms}ms`);
+    } else {
+      delayEl = el("span", "nc-delay bad", "TIMEOUT");
+    }
+    card.appendChild(delayEl);
+    chk.addEventListener("change", () => safe(async () => {
+      const all = [...$("#nodeGrid input[type=checkbox]"), ...$("#nodeTbody input[type=checkbox]")];
+      // 重新计算全集禁用：基于 cache 全集
+      const disSet = new Set();
+      nodeCache.forEach((nn) => {
+        const c = document.querySelector(`.node-card[data-n="${CSS.escape(nn.name)}"] input[type=checkbox]`);
+        const row = document.querySelector(`#nodeTbody tr[data-n="${CSS.escape(nn.name)}"] input[type=checkbox]`);
+        const checked = c ? c.checked : (row ? row.checked : !disSet.has(nn.name));
+        if (!checked) disSet.add(nn.name);
+      });
+      const d = await api("/api/nodes", "POST", { disabled: Array.from(disSet) });
+      loadState();
+    }, "更新节点"));
+    card.setAttribute("data-n", n.name);
+    card.addEventListener("click", (e) => {
+      if (e.target.tagName === "INPUT") return;
+      chk.click();
+    });
+    box.appendChild(card);
+  });
+}
+
+function renderNodeTable(nodes, sbNode) {
+  const tb = $("#nodeTbody");
+  clear(tb);
+  const items = filterNodes();
+  if (!items.length) {
+    tb.appendChild(el("tr")).appendChild(el("td", "", nodeCache.length ? "无匹配节点" : "暂无节点，请先在上方添加订阅并拉取。")).setAttribute("colspan", "6");
+    return;
+  }
+  const dis = new Set(...(STATE?.config?.outlet?.sb_disabled || []));
+  items.forEach((n) => {
+    const row = el("tr");
+    row.setAttribute("data-n", n.name);
+    // 启用
+    const enTd = el("td");
+    const en = el("input"); en.type = "checkbox"; en.checked = !dis.has(n.name);
+    en.addEventListener("change", () => safe(async () => {
+      const disSet = new Set();
+      $$("#nodeGrid .node-card").forEach((c) => {
+        if (!c.querySelector("input")?.checked) disSet.add(c.getAttribute("data-n"));
+      });
+      $$("#nodeTbody tr").forEach((r) => {
+        if (!r.querySelector("input")?.checked) disSet.add(r.getAttribute("data-n"));
+      });
+      const d = await api("/api/nodes", "POST", { disabled: Array.from(disSet) });
+      loadState();
+    }, "更新节点"));
+    enTd.appendChild(en); row.appendChild(enTd);
+    // 名称（可改名）
+    const nameTd = el("td");
+    const inp = el("input"); inp.value = n.name; inp.className = "name-edit";
+    inp.addEventListener("change", () => safe(async () => {
+      const to = inp.value.trim();
+      if (!to || to === n.name) return;
+      await api("/api/nodes", "POST", { rename: { from: n.name, to } });
+      toast("已重命名"); loadState();
+    }, "重命名"));
+    nameTd.appendChild(inp); row.appendChild(nameTd);
+    // 来源
+    row.appendChild(el("td", "", n.source || "本地"));
+    // 类型
+    row.appendChild(el("td")).appendChild(pill(n.type, "mute"));
+    // 测速
+    const tTd = el("td", "", "—"); tTd.setAttribute("data-name", n.name); row.appendChild(tTd);
+    // 默认
+    const defTd = el("td");
+    const r = el("input"); r.type = "radio"; r.name = "defNode"; r.checked = (n.name === sbNode);
+    r.addEventListener("change", () => safe(async () => {
+      await api("/api/nodes", "POST", { node: n.name });
+      loadState();
+    }, "设默认"));
+    defTd.appendChild(r); row.appendChild(defTd);
+    tb.appendChild(row);
+  });
+}
+
+function renderNodes() {
+  const cfg = STATE?.config?.outlet;
+  nodeCache = cfg?.sb_nodes || [];
+  const dis = new Set(cfg?.sb_disabled || []);
+  refreshSourceSel();
+  syncSelCount();
+  // 视图切换：grid 显示网格隐藏表，反之
+  const gridOn = nodeState.view === "grid";
+  $("#nodeGrid").style.display = gridOn ? "block" : "none";
+  $("#nodeTableWrap").style.display = gridOn ? "none" : "block";
+  $("#btnNodeGrid").classList.toggle("primary", gridOn);
+  $("#btnNodeList").classList.toggle("primary", !gridOn);
+  if (gridOn) {
+    renderNodeGrid();
+  }
+  // 列表 tbody 始终渲染（隐藏也不影响测速写回）
+  renderNodeTable(nodeCache, cfg?.sb_node || "");
+}
+
+$("#nodeSearch").addEventListener("input", (e) => { nodeState.q = e.target.value; if (nodeState.view === "grid") renderNodeGrid(); else renderNodeTable(nodeCache, STATE?.config?.outlet?.sb_node || ""); });
+$("#nodeSource").addEventListener("change", (e) => { nodeState.source = e.target.value; renderNodes(); });
+$("#btnNodeGrid").addEventListener("click", () => { nodeState.view = "grid"; renderNodes(); });
+$("#btnNodeList").addEventListener("click", () => { nodeState.view = "list"; renderNodes(); });
+
+$("#btnNodeTest").addEventListener("click", () => safe(async () => {
+  const out = $("#subOut"); out.appendChild(el("div", "hint", "正在测速（TCP 连通耗时）…"));
+  const d = await api("/api/subs/test", "POST", {});
+  delayMap = {};
+  (d.results || []).forEach((r) => { delayMap[r.tag] = r; });
+  // 把测速结果写回网格与列表
+  $$("#nodeGrid .node-card").forEach((c) => {
+    const name = c.getAttribute("data-n");
+    const r = delayMap[name];
+    let de = c.querySelector(".nc-delay");
+    if (!de) { de = el("span", "nc-delay"); c.appendChild(de); }
+    if (!r) { de.className = "nc-delay"; de.textContent = "—"; return; }
+    de.className = r.reachable ? `nc-delay ${r.ms < 300 ? "ok" : "warn"}` : "nc-delay bad";
+    de.textContent = r.reachable ? `${r.ms}ms` : "TIMEOUT";
+  });
+  $$("#nodeTbody tr").forEach((row) => {
+    const td = row.querySelector("td[data-name]");
+    if (!td) return;
+    const r = delayMap[td.getAttribute("data-name")];
+    if (!r) return;
+    td.textContent = "";
+    td.appendChild(pill(r.reachable ? `${r.ms}ms` : "不可达", r.reachable ? (r.ms < 300 ? "ok" : "warn") : "bad"));
+  });
+  const bad = (d.results || []).filter((r) => !r.reachable).length;
+  out.appendChild(el("div", "hint", `测速完成：不可达 ${bad} 个（TCP 耗时，真实延迟略高）。`));
+}, "节点测速"));
+
+function applyRouteUI(outlet) {
+  const mode = outlet.sb_route || "auto";
+  $$(`input[name=routeMode]`).forEach((r) => { r.checked = (r.value === mode); });
+  $("#customRoute").style.display = (mode === "custom") ? "block" : "none";
+  $("#inDirect").value = (outlet.sb_direct || []).join("\n");
+  $("#inProxyDomains").value = (outlet.sb_proxy || []).join("\n");
+  $("#sbTun").checked = !!outlet.sb_tun;
+  $("#inAutoUpdate").value = String(outlet.sb_auto_update || 0);
+  const hint = $("#sbRouteHint");
+  if (hint) hint.textContent = `当前分流模式：${mode === "auto" ? "智能分流（国内/局域网直连，仅目标域名走代理）" : mode === "all" ? "全部走代理（谨慎）" : "自定义"}。`;
+}
+
+$("#btnSubAdd").addEventListener("click", () => safe(async () => {
+  const url = $("#inSubUrl").value.trim();
+  if (!url && !$("#inSubRaw").value.trim()) { toast("请填写订阅地址或粘贴内容"); return; }
   const out = $("#subOut");
-  clear(out);
-  out.appendChild(el("div", "hint", "正在拉取订阅…"));
-  const d = await api("/api/subs/fetch", "POST", {
-    url: $("#inSubUrl").value.trim(),
+  clear(out); out.appendChild(el("div", "hint", "正在添加并拉取订阅…"));
+  const d = await api("/api/subs/add", "POST", {
+    name: $("#inSubName").value.trim(),
+    url,
     ua: $("#inSubUa").value.trim() || "clash.meta",
     proxy: $("#inSubProxy").value.trim(),
-    raw: $("#inSubRaw").value,
+    enabled: $("#inSubEnabled").checked,
   });
   clear(out);
-  out.appendChild(pill("解析完成", "ok"));
+  out.appendChild(pill(d.ok ? "完成" : "失败", d.ok ? "ok" : "bad"));
+  out.appendChild(el("div", "", d.message));
+  if (d.summary) d.summary.forEach((s) => out.appendChild(el("div", "mono", `${s.name}: ${s.ok ? s.message : s.message}`)));
+  loadState();
+}, "添加订阅"));
+
+$("#btnSubUpdateAll").addEventListener("click", () => safe(async () => {
+  const out = $("#subOut"); clear(out); out.appendChild(el("div", "hint", "正在更新全部订阅…"));
+  const d = await api("/api/subs/update", "POST", {});
+  clear(out);
+  out.appendChild(pill(d.ok ? "完成" : "失败", d.ok ? "ok" : "bad"));
+  out.appendChild(el("div", "", d.message));
+  loadState();
+}, "更新全部订阅"));
+
+$("#btnSubRaw").addEventListener("click", () => safe(async () => {
+  const raw = $("#inSubRaw").value.trim();
+  if (!raw) { toast("请先粘贴订阅内容"); return; }
+  const out = $("#subOut"); clear(out); out.appendChild(el("div", "hint", "正在解析粘贴内容…"));
+  const d = await api("/api/subs/add", "POST", {
+    name: $("#inSubName").value.trim() || "本地粘贴",
+    raw,
+    enabled: true,
+  });
+  clear(out);
+  out.appendChild(pill(d.ok ? "完成" : "失败", d.ok ? "ok" : "bad"));
   out.appendChild(el("div", "", d.message));
   if (d.unsupported && d.unsupported.length) {
     out.appendChild(el("div", "hint", `不支持的协议：${d.unsupported.join(", ")}（已跳过）`));
   }
-  const sel = $("#selNode");
-  clear(sel);
-  sel.appendChild(el("option", "", "（未选择节点）"));
-  (d.nodes || []).forEach((n) => {
-    const o = el("option", "", `${n.name} · ${n.type}`);
-    o.value = n.name;
-    sel.appendChild(o);
-  });
-  renderNodeList(d.nodes || []);
-}, "拉取订阅"));
+  loadState();
+}, "解析粘贴内容"));
 
-$("#btnSubTest").addEventListener("click", () => safe(async () => {
-  const out = $("#subOut");
-  out.appendChild(el("div", "hint", "正在测速（TCP 连通耗时）…"));
-  const d = await api("/api/subs/test", "POST", {});
-  const table = el("table", "data");
-  const tr = el("tr");
-  ["节点", "TCP 耗时"].forEach((h) => tr.appendChild(el("th", "", h)));
-  table.appendChild(tr);
-  (d.results || []).forEach((r) => {
-    const row = el("tr");
-    row.appendChild(el("td", "", r.tag));
-    row.appendChild(el("td")).appendChild(
-      pill(r.reachable ? `${r.ms}ms` : "不可达", r.reachable ? (r.ms < 300 ? "ok" : "warn") : "bad"));
-    table.appendChild(row);
+$$(`input[name=routeMode]`).forEach((r) => r.addEventListener("change", () => {
+  $("#customRoute").style.display = (r.value === "custom") ? "block" : "none";
+}));
+
+$("#btnRouteSave").addEventListener("click", () => safe(async () => {
+  const mode = ($$(`input[name=routeMode]`).find((r) => r.checked) || {}).value || "auto";
+  await api("/api/settings", "POST", {
+    outlet: {
+      sb_route: mode,
+      sb_direct: $("#inDirect").value.split("\n").map((s) => s.trim()).filter(Boolean),
+      sb_proxy: $("#inProxyDomains").value.split("\n").map((s) => s.trim()).filter(Boolean),
+      sb_tun: $("#sbTun").checked,
+      sb_auto_update: parseInt($("#inAutoUpdate").value || "0", 10) || 0,
+    },
   });
-  out.appendChild(table);
-  out.appendChild(el("div", "hint", "这是到节点服务器的 TCP 耗时，真实代理延迟略高于此值。"));
-}, "测速"));
+  toast("分流设置已保存"); loadState();
+}, "保存分流设置"));
 
 /* ---------------- sing-box ---------------- */
 async function sb(action) {
@@ -559,6 +819,7 @@ async function boot() {
   await loadState().catch((e) => toast(`初始化失败：${e.message}`));
   loadBackups().catch(() => {});
   Traffic.start();
+  if (typeof LogPage !== "undefined") LogPage.boot();
 }
 
 /* ---------------- 实时流量图（仿 v2rayA） ---------------- */
@@ -635,6 +896,19 @@ const Traffic = (function () {
     $("#tConns").textContent = (d.conns == null ? "—" : d.conns);
     $("#tDownTot").textContent = fmt(d.down_bytes || 0);
     $("#tUpTot").textContent = fmt(d.up_bytes || 0);
+    // 各节点连接分布
+    const box = $("#tNodes");
+    const by = d.conns_by_node || {};
+    const entries = Object.entries(by).sort((a, b) => b[1] - a[1]);
+    box.innerHTML = "";
+    if (!entries.length) {
+      box.appendChild(el("span", "muted", "暂无活跃连接"));
+    } else {
+      entries.forEach(([tag, n]) => {
+        const chip = el("span", "nchip", `${tag} · ${n}`);
+        box.appendChild(chip);
+      });
+    }
     draw();
   }
 
@@ -663,6 +937,103 @@ const Traffic = (function () {
   }
 
   return { start };
+})();
+
+/* ---------------- 日志页（仿 v2rayA「日志」） ---------------- */
+const LogPage = (function () {
+  let timer = null;
+  let activeLevel = "";
+  let searchQ = "";
+  let activeScope = "";
+  const rows = [];   // 已渲染日志（最新在末尾）
+
+  function lvBadge(lv) {
+    const map = { error: "bad", warn: "warn", debug: "mute", trace: "mute", info: "ok" };
+    return el("span", `lv lv-${lv}`, lv.toUpperCase().slice(0, 5));
+  }
+
+  function renderLog() {
+    const body = $("#logBody");
+    const q = searchQ.trim().toLowerCase();
+    const shown = rows.filter((r) => {
+      if (activeScope && r.scope !== activeScope) return false;
+      if (!q) return true;
+      return `${r.level} ${r.scope} ${r.msg}`.toLowerCase().includes(q);
+    });
+    clear(body);
+    shown.slice(-500).forEach((r) => {
+      const line = el("div", `logline lv-${r.level}`);
+      const ts = el("span", "lt", r.ts);
+      line.appendChild(lvBadge(r.level));
+      line.appendChild(el("span", "ls", `[${r.scope}]`));
+      const msg = el("span", "lm", r.msg);
+      line.appendChild(msg);
+      body.appendChild(line);
+    });
+    $("#logCount").textContent = shown.length ? `${shown.length} 条` : "";
+    body.scrollTop = body.scrollHeight;
+  }
+
+  async function refresh(scopes) {
+    try {
+      const d = await api(`/api/logs?since=${nodeState.lastSeq}&level=${encodeURIComponent(activeLevel)}&limit=200`);
+      (d.logs || []).forEach((r) => {
+        if (r.seq > nodeState.lastSeq) { rows.push(r); nodeState.lastSeq = r.seq; }
+      });
+      if (scopes) refreshScopes(d);
+      renderLog();
+    } catch (e) { /* 401 由 api 统一处理 */ }
+  }
+
+  async function refreshScopes() {
+    try {
+      const d = await api("/api/logs/scopes");
+      const sel = $("#logScopeSel");
+      const cur = sel.value || activeScope;
+      sel.innerHTML = "";
+      sel.appendChild(el("option", "", "全部来源"));
+      (d.scopes || []).forEach((s) => sel.appendChild(el("option", "", s)));
+      sel.value = cur && (d.scopes || []).includes(cur) ? cur : "";
+      activeScope = sel.value;
+    } catch (e) { /* 忽略 */ }
+  }
+
+  function startTimer() {
+    if (timer) clearInterval(timer);
+    const ms = parseInt($("#logAutoInt").value || "0", 10);
+    if (ms > 0) timer = setInterval(() => refresh(false), ms);
+  }
+
+  async function boot() {
+    // 初次载入：拉全量
+    nodeState.lastSeq = 0; rows.length = 0;
+    await refresh(false);
+    refreshScopes();
+    startTimer();
+  }
+
+  // 级别标签
+  $$("#logLevelTabs .lv").forEach((b) => b.addEventListener("click", () => {
+    $$("#logLevelTabs .lv").forEach((x) => x.classList.remove("on"));
+    b.classList.add("on");
+    activeLevel = b.dataset.lv;
+    rows.length = 0; nodeState.lastSeq = 0;
+    refresh(false);
+  }));
+  $("#logSearch").addEventListener("input", (e) => { searchQ = e.target.value; renderLog(); });
+  $("#logScopeSel").addEventListener("change", (e) => { activeScope = e.target.value; renderLog(); });
+  $("#logAutoInt").addEventListener("change", startTimer);
+  $("#btnLogExport").addEventListener("click", () => safe(async () => {
+    const d = await api(`/api/logs/export?level=${encodeURIComponent(activeLevel)}`);
+    const blob = new Blob([d.text || ""], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = el("a"); a.href = url; a.download = `uproxy-logs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "")}.txt`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast("日志已导出");
+  }, "导出日志"));
+
+  return { boot };
 })();
 
 boot();

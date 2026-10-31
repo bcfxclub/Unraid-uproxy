@@ -51,7 +51,8 @@ def _docker_netio(name: str):
     return {"rx": _parse_size(parts[0]), "tx": _parse_size(parts[1])}
 
 
-def _sb_conns() -> int | None:
+def _sb_conns() -> list | None:
+    """返回 sing-box 当前活动连接列表（每个含 outbound 字段），供统计总数与按节点分布。"""
     r = host.run(
         ["curl", "-sS", "--max-time", "6",
          "-H", f"Authorization: Bearer {_SB_TOKEN}",
@@ -62,7 +63,7 @@ def _sb_conns() -> int | None:
         return None
     try:
         d = json.loads(r["out"] or "{}")
-        return len(d.get("connections") or [])
+        return d.get("connections") or []
     except Exception:
         return None
 
@@ -82,10 +83,19 @@ def snapshot() -> dict:
     if not (running and name):
         return {"ok": True, "running": False, "mode": mode}
 
-    conns = _sb_conns() if mode == "singbox" else None
+    conns_list = _sb_conns() if mode == "singbox" else None
+    conns = len(conns_list) if conns_list is not None else None
+    # 按节点（sing-box 出站 tag）统计连接分布
+    conns_by_node: dict[str, int] = {}
+    if conns_list:
+        for c in conns_list:
+            tag = (c.get("outbound") or {}).get("tag") or c.get("outbound_tag") or "?"
+            conns_by_node[tag] = conns_by_node.get(tag, 0) + 1
+
     net = _docker_netio(name)
     if net is None:
-        return {"ok": True, "running": True, "mode": mode, "conns": conns}
+        return {"ok": True, "running": True, "mode": mode,
+                "conns": conns, "conns_by_node": conns_by_node}
 
     now = time.time()
     prev = _prev.get(name)
@@ -100,5 +110,5 @@ def snapshot() -> dict:
         "ok": True, "running": True, "mode": mode,
         "down_bytes": net["rx"], "up_bytes": net["tx"],
         "down_rate": down_rate, "up_rate": up_rate,
-        "conns": conns,
+        "conns": conns, "conns_by_node": conns_by_node,
     }

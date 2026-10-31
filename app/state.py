@@ -40,8 +40,21 @@ class OutletCfg(BaseModel):
     sb_port: int = 7890
     sb_node: str = ""
     sb_nodes: list[dict[str, Any]] = Field(default_factory=list)
+    # 被用户停用的节点 name 列表（仍在订阅里，但不进 selector / 不分流）
+    sb_disabled: list[str] = Field(default_factory=list)
 
-    sub_url: str = ""
+    # 多订阅源：{id,name,url,ua,proxy,enabled,updated_at,count}
+    subscriptions: list[dict[str, Any]] = Field(default_factory=list)
+
+    # 分流模式：auto(默认，国内外分流，保护局域网/国内镜像) / all(全部走代理) / custom(自定义)
+    sb_route: str = "auto"
+    sb_direct: list[str] = Field(default_factory=list)   # 始终直连的域名/后缀/IP段
+    sb_proxy: list[str] = Field(default_factory=list)    # 始终走代理的域名/后缀
+
+    sb_tun: bool = False        # TUN 透明代理（需 NET_ADMIN，影响整台主机出网，默认关）
+    sb_auto_update: int = 0     # 订阅自动更新间隔（分钟），0=关闭
+
+    sub_url: str = ""           # 兼容旧版单订阅；迁移后由 subscriptions 驱动
     sub_ua: str = "clash.meta"
 
 
@@ -76,12 +89,29 @@ def load() -> AppCfg:
         try:
             with open(S.STATE_FILE, "r", encoding="utf-8") as f:
                 _cfg = AppCfg.model_validate(json.load(f))
+            _migrate(_cfg)
             return _cfg
         except Exception:
             pass
     _cfg = AppCfg()
     save(_cfg)
     return _cfg
+
+
+def _migrate(cfg: AppCfg) -> None:
+    """兼容旧版单订阅字段 sub_url -> 多订阅 subscriptions。"""
+    if not cfg.outlet.subscriptions and cfg.outlet.sub_url:
+        import time
+        cfg.outlet.subscriptions = [{
+            "id": f"sub-{int(time.time())}",
+            "name": "默认订阅",
+            "url": cfg.outlet.sub_url,
+            "ua": cfg.outlet.sub_ua or "clash.meta",
+            "proxy": "",
+            "enabled": True,
+            "updated_at": "",
+            "count": len(cfg.outlet.sb_nodes),
+        }]
 
 
 def save(cfg: AppCfg) -> None:

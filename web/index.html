@@ -41,6 +41,10 @@
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3v14M8 13l4 4 4-4"/><path d="M4 21h16"/></svg>
       <span>备份与还原</span>
     </button>
+    <button data-tab="logs">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 5h16M4 10h16M4 15h10M4 20h7"/></svg>
+      <span>日志</span>
+    </button>
     <button data-tab="docs">
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3h9l4 4v14H6z"/><path d="M9 11h6M9 15h6"/></svg>
       <span>文档</span>
@@ -89,7 +93,8 @@
         <div class="tstat"><span class="k">上行总计</span><b id="tUpTot">0 B</b></div>
       </div>
       <canvas id="trafficChart" class="tchart"></canvas>
-      <div class="hint">数据来自出口容器（WARP / sing-box）的真实网络吞吐；连接数仅 sing-box 提供。「出口」页启动 WARP 或 sing-box 后这里才会跳动。</div>
+      <div id="tNodes" class="tnodes"></div>
+      <div class="hint">数据来自出口容器（WARP / sing-box）的真实网络吞吐；连接数仅 sing-box 提供。「出口」页启动 WARP 或 sing-box 后这里才会跳动。下方为各节点的实时连接分布。</div>
     </div>
   </section>
 
@@ -130,6 +135,7 @@
       </div>
       <div id="pane-singbox" class="pane">
         <h3>出口</h3>
+        <p class="hint" id="sbRouteHint">分流模式将在「订阅」页设置（默认智能分流，保护国内/局域网）。</p>
         <div class="row">
           <select id="selNode"><option value="">（请先在「订阅」页拉取节点）</option></select>
           <input id="inSbPort" type="number" placeholder="7890" style="max-width:110px">
@@ -144,23 +150,81 @@
   <!-- ============ 订阅 ============ -->
   <section id="tab-subs">
     <div class="card">
-      <h2>订阅 <span class="tag">拉取节点并测速</span></h2>
-      <div class="row">
+      <h2>订阅源管理 <span class="tag">支持多个订阅并存、自动更新</span></h2>
+      <div id="subList" class="out"></div>
+      <div class="row wrap" style="margin-top:12px">
+        <input id="inSubName" placeholder="备注名（可选）" style="max-width:160px">
         <input id="inSubUrl" placeholder="订阅地址 https://... 或 base64...">
-        <input id="inSubUa" placeholder="UA（可选）" style="max-width:150px">
-        <button id="btnSubFetch" class="primary">拉取并解析</button>
-        <button id="btnSubTest">节点测速</button>
+        <input id="inSubUa" placeholder="UA" style="max-width:110px">
+        <input id="inSubProxy" placeholder="通过代理拉取（可选）" style="max-width:200px">
       </div>
+      <div class="row wrap">
+        <label class="chk"><input type="checkbox" id="inSubEnabled" checked> 启用</label>
+        <button id="btnSubAdd" class="primary">添加并拉取</button>
+        <button id="btnSubUpdateAll">更新全部</button>
+      </div>
+      <label class="lbl">或直接粘贴订阅内容 / Clash YAML（本地解析，不经网络）</label>
       <div class="row">
-        <input id="inSubProxy" placeholder="通过代理拉取（可选）如 socks5://127.0.0.1:1080 或 http://127.0.0.1:7890">
+        <textarea id="inSubRaw" rows="3" placeholder="vmess://... 或 proxies:"></textarea>
+        <button id="btnSubRaw">解析粘贴内容</button>
       </div>
-      <label class="lbl">或直接粘贴订阅内容 / Clash YAML</label>
-      <textarea id="inSubRaw" rows="5" placeholder="vmess://... 或 proxies:"></textarea>
       <div id="subOut" class="out"></div>
     </div>
+
     <div class="card">
-      <h2>节点列表 <span class="tag">选一个出口，再到「出口」页启动 sing-box</span></h2>
-      <div id="nodeList" class="out"></div>
+      <h2>节点管理 <span class="tag">按订阅来源分组 · 勾选启用 / 选默认出口 / 测速</span></h2>
+      <div class="row wrap" style="justify-content:space-between">
+        <div class="row wrap">
+          <input id="nodeSearch" placeholder="搜索节点…" style="max-width:180px">
+          <label class="lbl" style="margin:0">来源</label>
+          <select id="nodeSource"><option value="">全部</option></select>
+          <span id="nodeSelCount" class="muted" style="font-size:12px"></span>
+        </div>
+        <div class="row">
+          <button id="btnNodeTest">测试延迟</button>
+          <button id="btnNodeGrid" class="primary" title="网格视图">▦</button>
+          <button id="btnNodeList" title="列表视图">☰</button>
+        </div>
+      </div>
+      <div id="nodeGrid" class="nodegrid"></div>
+      <div class="tablewrap" id="nodeTableWrap">
+        <table class="tbl" id="nodeTable">
+          <thead>
+            <tr><th style="width:54px">启用</th><th>名称</th><th style="width:90px">来源</th><th style="width:80px">类型</th><th style="width:90px">测速</th><th style="width:64px">默认</th></tr>
+          </thead>
+          <tbody id="nodeTbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>分流与高级 <span class="tag">仿 v2rayA 的智能路由</span></h2>
+      <label class="lbl">分流模式</label>
+      <div class="row wrap">
+        <label class="opt"><input type="radio" name="routeMode" value="auto" checked> 智能分流（推荐）：仅 docker/GitHub/CA 等走代理，国内与局域网直连</label>
+        <label class="opt"><input type="radio" name="routeMode" value="all"> 全部走代理（谨慎：会代理所有流量）</label>
+        <label class="opt"><input type="radio" name="routeMode" value="custom"> 自定义</label>
+      </div>
+      <div id="customRoute" style="display:none">
+        <label class="lbl">始终直连的域名/后缀（每行一个，如 .cn 或 example.com）</label>
+        <textarea id="inDirect" rows="3" placeholder=".cn&#10;example.com"></textarea>
+        <label class="lbl">始终走代理的域名/后缀</label>
+        <textarea id="inProxyDomains" rows="3" placeholder="github.com&#10;docker.io"></textarea>
+      </div>
+      <div class="row wrap" style="margin-top:10px">
+        <label class="chk"><input type="checkbox" id="sbTun"> 启用 TUN 透明代理（影响整台主机出网，需 NET_ADMIN）</label>
+      </div>
+      <div class="row wrap">
+        <label class="lbl" style="margin:0">订阅自动更新</label>
+        <select id="inAutoUpdate">
+          <option value="0">关闭</option>
+          <option value="30">每 30 分钟</option>
+          <option value="60">每 1 小时</option>
+          <option value="360">每 6 小时</option>
+          <option value="720">每 12 小时</option>
+        </select>
+        <button id="btnRouteSave" class="primary">保存分流设置</button>
+      </div>
     </div>
   </section>
 
@@ -225,6 +289,33 @@
       <p class="hint">只移除 /boot/config/go 里的托管块，不还原其他文件（请用上面的还原功能）。</p>
       <button id="btnUninstall">移除开机重放块</button>
       <div id="uninstOut" class="out"></div>
+    </div>
+  </section>
+
+  <!-- ============ 日志 ============ -->
+  <section id="tab-logs">
+    <div class="card logcard">
+      <h2>日志 <span class="tag" id="logCount"></span></h2>
+      <div class="row wrap logtabs" id="logLevelTabs">
+        <button data-lv="" class="lv on">全部</button>
+        <button data-lv="error" class="lv">错误</button>
+        <button data-lv="warn" class="lv">警告</button>
+        <button data-lv="info" class="lv">信息</button>
+        <button data-lv="debug" class="lv">调试</button>
+        <button data-lv="trace" class="lv">跟踪</button>
+      </div>
+      <div class="row wrap logbar">
+        <input id="logSearch" placeholder="搜索日志…" style="max-width:180px">
+        <select id="logScopeSel"><option value="">全部来源</option></select>
+        <select id="logAutoInt">
+          <option value="1000">自动刷新 1s</option>
+          <option value="3000">自动刷新 3s</option>
+          <option value="5000" selected>自动刷新 5s</option>
+          <option value="0">关闭自动刷新</option>
+        </select>
+        <button id="btnLogExport">导出日志</button>
+      </div>
+      <div id="logBody" class="logbody"></div>
     </div>
   </section>
 
