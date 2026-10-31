@@ -39,12 +39,20 @@ if ! docker build -t uproxy:latest "$SRC"; then
   exit 1
 fi
 
-echo "==> 生成访问口令"
-if [ -z "${UPX_TOKEN:-}" ]; then
-  UPX_TOKEN="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 24)"
-  echo "    已自动生成： $UPX_TOKEN"
-  echo "    （请记下来，页面与接口需要用到）"
+echo "==> 生成登录密码"
+# 优先用显式设置的 UPX_PASSWORD；老部署可能只设了 UPX_TOKEN，继续当密码用。
+if [ -z "${UPX_PASSWORD:-}" ]; then
+  if [ -n "${UPX_TOKEN:-}" ]; then
+    UPX_PASSWORD="$UPX_TOKEN"
+    echo "    沿用已设置的 UPX_TOKEN 作为密码"
+  else
+    UPX_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 24)"
+    echo "    已自动生成密码： $UPX_PASSWORD"
+    echo "    （请记下来，首次登录需要用到）"
+  fi
 fi
+# 同时把密码作为旧式直连口令下发，老书签 ?token= 仍能继续使用。
+UPX_TOKEN="$UPX_PASSWORD"
 
 echo "==> 启动容器"
 docker rm -f uproxy >/dev/null 2>&1 || true
@@ -55,6 +63,8 @@ docker run -d \
   -e "UPX_HOST_ROOT=/host" \
   -e "UPX_STATE_DIR=/config" \
   -e "TZ=Asia/Shanghai" \
+  -e "UPX_USER=admin" \
+  -e "UPX_PASSWORD=${UPX_PASSWORD}" \
   -e "UPX_TOKEN=${UPX_TOKEN}" \
   -v /boot:/host/boot \
   -v /etc/docker:/host/etc/docker \
@@ -67,10 +77,11 @@ docker run -d \
 echo
 echo "==> 完成"
 IP="$(hostname -i 2>/dev/null | awk '{print $1}')"
-echo "    直接点这个（已带口令，浏览器会自动记住）："
-echo "      http://${IP}:${PORT}/?token=${UPX_TOKEN}"
-echo "    口令： ${UPX_TOKEN}"
-echo "    （不入口令的话，页面上所有操作都会显示「未授权」）"
+echo "    在浏览器打开："
+echo "      http://${IP}:${PORT}/"
+echo "    用户名： admin"
+echo "    密码：   ${UPX_PASSWORD}"
+echo "    （登录一次后浏览器会自动记住，无需再次输入）"
 echo
 echo "下一步：先在 WebUI「下发」页点「生成变更预览」核对 diff，确认无误再点「应用变更」。"
 echo "rc.docker 的行格式随 Unraid 版本变化，首次使用请务必人工核对一次。"

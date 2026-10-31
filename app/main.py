@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -9,6 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from . import auth
 from . import health
 from . import host
 from . import outlets
@@ -17,21 +19,25 @@ from . import probe
 from . import registry
 from . import settings as S
 from . import state as st
+from . import stats as stats_mod
 from . import subs
 from . import targets
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
-TOKEN = os.environ.get("UPX_TOKEN", "").strip()
 
 app = FastAPI(title="uproxy", version="1.0.0")
 
 
 async def guard(request: Request, x_upx_token: str | None = Header(default=None)):
-    if not TOKEN:
+    if not auth.REQUIRED:
         return
     supplied = x_upx_token or request.query_params.get("token") or ""
-    if supplied != TOKEN:
-        raise HTTPException(status_code=401, detail="未授权")
+    if auth.check_session(supplied):
+        return
+    # 兼容老的「直连口令」方式（显式设置了 UPX_TOKEN 时）
+    if auth.LEGACY_TOKEN and secrets.compare_digest(supplied, auth.LEGACY_TOKEN):
+        return
+    raise HTTPException(status_code=401, detail="未授权")
 
 
 class ApplyReq(BaseModel):
@@ -79,12 +85,39 @@ app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
 
 # --------------------------------------------------------------------------
+# 认证（账号密码登录 / 会话）
+# --------------------------------------------------------------------------
+@app.get("/api/auth/info", include_in_schema=False)
+def api_auth_info():
+    return {"ok": True, "required": auth.REQUIRED, "user": auth.USER if auth.REQUIRED else ""}
+
+
+@app.post("/api/login", include_in_schema=False)
+def api_login(data: dict):
+    tok = auth.login(str(data.get("username", "")), str(data.get("password", "")))
+    if not tok:
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    return {"ok": True, "token": tok, "user": auth.USER}
+
+
+@app.post("/api/logout", dependencies=[Depends(guard)])
+def api_logout(x_upx_token: str | None = Header(default=None)):
+    auth.logout(x_upx_token)
+    return {"ok": True}
+
+
+# --------------------------------------------------------------------------
 # 状态
 # --------------------------------------------------------------------------
 @app.get("/api/state", dependencies=[Depends(guard)])
 def api_state():
     cfg = st.load()
     return {"ok": True, "config": cfg.model_dump(), "probe": probe.snapshot()}
+
+
+@app.get("/api/outlet/stats", dependencies=[Depends(guard)])
+def api_outlet_stats():
+    return stats_mod.snapshot()
 
 
 @app.post("/api/settings", dependencies=[Depends(guard)])

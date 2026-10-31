@@ -47,10 +47,6 @@
     </button>
   </nav>
 
-  <div class="auth">
-    <input id="inToken" type="password" placeholder="访问口令" autocomplete="off" spellcheck="false">
-    <button id="btnToken">保存</button>
-  </div>
   <div class="side-foot"><span>uproxy</span><span class="ver">v1.0</span></div>
 </aside>
 
@@ -59,6 +55,8 @@
   <div class="topbar">
     <div class="title" id="pageTitle">概览</div>
     <div class="spacer"></div>
+    <span class="who" id="who"></span>
+    <button id="btnLogout" class="btn-ghost">退出</button>
     <span class="badge" id="runBadge"><span class="dot"></span><span id="runText">正在运行</span></span>
     <span id="env" class="mono" style="color:var(--muted);font-size:11px"></span>
   </div>
@@ -79,6 +77,19 @@
         </div>
         <div id="healthOut" class="out"></div>
       </div>
+    </div>
+
+    <div class="card">
+      <h2>实时流量 <span class="tag" id="tHint">未启用出口</span></h2>
+      <div class="tstats">
+        <div class="tstat"><span class="k">下行</span><b id="tDown" class="dn">0 B/s</b></div>
+        <div class="tstat"><span class="k">上行</span><b id="tUp" class="up">0 B/s</b></div>
+        <div class="tstat"><span class="k">连接</span><b id="tConns">—</b></div>
+        <div class="tstat"><span class="k">下行总计</span><b id="tDownTot">0 B</b></div>
+        <div class="tstat"><span class="k">上行总计</span><b id="tUpTot">0 B</b></div>
+      </div>
+      <canvas id="trafficChart" class="tchart"></canvas>
+      <div class="hint">数据来自出口容器（WARP / sing-box）的真实网络吞吐；连接数仅 sing-box 提供。「出口」页启动 WARP 或 sing-box 后这里才会跳动。</div>
     </div>
   </section>
 
@@ -239,6 +250,17 @@
       <p><b>页面能打开但点什么都是「未授权」</b>：把口令填到左侧底部输入框，或直接用带 <code>?token=</code> 的完整地址打开。</p>
     </div>
   </section>
+  </div>
+</div>
+
+<div id="login" class="login">
+  <div class="box">
+    <h1><span class="logo">U</span> uproxy</h1>
+    <div class="sub">Unraid 出网加速 · 请登录</div>
+    <input id="inUser" placeholder="用户名" autocomplete="username" spellcheck="false">
+    <input id="inPass" type="password" placeholder="密码" autocomplete="current-password" spellcheck="false">
+    <button id="btnLogin" class="primary">登录</button>
+    <div class="err" id="loginErr"></div>
   </div>
 </div>
 

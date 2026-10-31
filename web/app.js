@@ -13,59 +13,93 @@ function toast(msg) {
   toastTimer = setTimeout(() => el.classList.remove("on"), 3000);
 }
 
-/* ---------------- 访问口令（对应后端 UPX_TOKEN） ----------------
-   后端所有 /api/* 都校验口令，不带就返回 401「未授权」。
-   口令来源优先级：URL 的 ?token= > localStorage > 手动输入。
-   用户用 http://<IP>:8765/?token=xxxx 打开即可自动填好并记住。            */
-const TOKEN_KEY = "upx_token";
-let TOKEN = "";
+/* ---------------- 会话令牌（登录后获得，对用户透明） ----------------
+   后端是账号 + 密码登录，登录成功后下发一个随机会话令牌，前端只持有它，
+   不再直接接触密码。令牌存 localStorage，并通过 X-UPX-Token 头发送。
+   兼容老的 ?token= 直连方式（升级前用旧口令开的链接仍可用）。            */
+const SESSION_KEY = "upx_session";
+let SESSION = "";
 
-(function initToken() {
-  const q = new URLSearchParams(location.search).get("token");
+(function initSession() {
+  const q = new URLSearchParams(location.search).get("token"); // 兼容老 ?token=
   if (q) {
-    TOKEN = q.trim();
-    try { localStorage.setItem(TOKEN_KEY, TOKEN); } catch (e) { /* 隐私模式忽略 */ }
+    SESSION = q.trim();
+    try { localStorage.setItem(SESSION_KEY, SESSION); } catch (e) { /* 隐私模式忽略 */ }
   } else {
-    try { TOKEN = localStorage.getItem(TOKEN_KEY) || ""; } catch (e) { TOKEN = ""; }
+    try { SESSION = localStorage.getItem(SESSION_KEY) || ""; } catch (e) { SESSION = ""; }
   }
 })();
 
-function setToken(v) {
-  TOKEN = (v || "").trim();
-  try { localStorage.setItem(TOKEN_KEY, TOKEN); } catch (e) { /* ignore */ }
-  const box = $("#inToken");
-  if (box) box.value = TOKEN;
+function setSession(v) {
+  SESSION = (v || "").trim();
+  try { localStorage.setItem(SESSION_KEY, SESSION); } catch (e) { /* ignore */ }
 }
 
 function _opt(method, body) {
   const headers = {};
-  if (TOKEN) headers["X-UPX-Token"] = TOKEN;
+  if (SESSION) headers["X-UPX-Token"] = SESSION;
   if (body !== undefined) headers["Content-Type"] = "application/json";
   const opt = { method, headers };
   if (body !== undefined) opt.body = JSON.stringify(body);
   return opt;
 }
 
+/* ---------------- 登录 / 登出 ---------------- */
+function showLogin(msg) {
+  const box = $("#login");
+  if (!box) return;
+  box.classList.add("on");
+  if (msg) $("#loginErr").textContent = msg;
+  const u = $("#inUser");
+  if (u && !u.value) u.focus();
+}
+function hideLogin() { const b = $("#login"); if (b) b.classList.remove("on"); }
+
+async function doLogin() {
+  const u = $("#inUser").value.trim();
+  const p = $("#inPass").value;
+  try {
+    const r = await fetch("/api/login", _opt("POST", { username: u, password: p }));
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      $("#loginErr").textContent = j.detail || "登录失败";
+      return;
+    }
+    const j = await r.json();
+    setSession(j.token);
+    $("#who").textContent = j.user || u;
+    $("#loginErr").textContent = "";
+    hideLogin();
+    await loadState();
+    loadBackups().catch(() => {});
+    Traffic.start();
+  } catch (e) {
+    $("#loginErr").textContent = e.message || "登录失败";
+  }
+}
+
+async function doLogout() {
+  try { await api("/api/logout", "POST", {}); } catch (e) { /* 忽略 */ }
+  setSession("");
+  showLogin("已退出登录");
+}
+
+$("#btnLogin").addEventListener("click", () => safe(doLogin, "登录"));
+$("#inPass").addEventListener("keydown", (e) => { if (e.key === "Enter") safe(doLogin, "登录"); });
+$("#inUser").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#inPass").focus(); });
+$("#btnLogout").addEventListener("click", () => safe(doLogout, "退出"));
+
 async function api(path, method = "GET", body) {
   let r = await fetch(path, _opt(method, body));
   if (r.status === 401) {
-    // 口令缺失或不对。让用户输入一次后重试，避免每个按钮都报「未授权」。
-    const v = prompt(
-      "未授权：需要访问口令。\n\n" +
-      "它是 install.sh 结束时打印的那串（或容器环境变量 UPX_TOKEN）。\n" +
-      "也可以直接用 http://" + location.host + "/?token=xxxx 打开。",
-      TOKEN || "");
-    if (v !== null) {
-      setToken(v);
-      r = await fetch(path, _opt(method, body));
-    }
+    // 会话失效 / 未登录 -> 回到登录页
+    setSession("");
+    showLogin("会话已失效，请重新登录");
+    throw new Error("未登录");
   }
   let data = null;
   try { data = await r.json(); } catch (e) { data = { ok: false, message: "响应不是 JSON" }; }
   if (!r.ok || data.ok === false) {
-    if (r.status === 401) {
-      throw new Error("口令不对，接口仍未授权");
-    }
     throw new Error(data.message || data.detail || `HTTP ${r.status}`);
   }
   return data;
@@ -103,7 +137,7 @@ function switchTab(name) {
   btn.classList.add("on");
   $(`#tab-${name}`).classList.add("on");
   $("#pageTitle").textContent = TITLES[name] || name;
-  history.replaceState(null, "", `?${new URLSearchParams({ tab: name, token: TOKEN }).toString()}`);
+  history.replaceState(null, "", `?${new URLSearchParams({ tab: name }).toString()}`);
 }
 
 $$(".nav button").forEach((b) => b.addEventListener("click", () => switchTab(b.dataset.tab)));
@@ -503,20 +537,131 @@ $("#btnUninstall").addEventListener("click", () => safe(async () => {
   await loadState();
 }, "卸载"));
 
-/* ---------------- 口令输入框 ---------------- */
-{
-  const box = $("#inToken");
-  if (box) {
-    box.value = TOKEN;
-    box.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") $("#btnToken").click();
-    });
+/* ---------------- 启动：先看是否要登录 ---------------- */
+async function boot() {
+  let info = { required: false };
+  try {
+    info = await (await fetch("/api/auth/info")).json();
+  } catch (e) { info = { required: false }; }
+
+  if (info.required) {
+    if (!SESSION) { showLogin(); return; }
+    // 验证已有会话是否仍然有效
+    try {
+      await api("/api/state");
+    } catch (e) {
+      showLogin("请登录");
+      return;
+    }
+    $("#who").textContent = info.user || "";
   }
-  $("#btnToken").addEventListener("click", () => {
-    setToken(box ? box.value : "");
-    toast(TOKEN ? "口令已保存" : "口令已清空");
-    loadState().catch((e) => toast(`刷新失败：${e.message}`));
-  });
+  await loadState().catch((e) => toast(`初始化失败：${e.message}`));
+  loadBackups().catch(() => {});
+  Traffic.start();
 }
 
-loadState().then(loadBackups).catch((e) => toast(`初始化失败：${e.message}`));
+/* ---------------- 实时流量图（仿 v2rayA） ---------------- */
+const Traffic = (function () {
+  const MAX = 60;
+  let down = [], up = [];
+  let canvas = null, ctx = null, timer = null;
+
+  function resize() {
+    if (!canvas) return;
+    const w = canvas.clientWidth || 600;
+    const h = 160;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    draw();
+  }
+
+  function fmt(b) {
+    b = Number(b) || 0;
+    const u = ["B", "KB", "MB", "GB", "TB"];
+    let i = 0;
+    while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+    return (b < 10 && i > 0 ? b.toFixed(2) : b.toFixed(1)) + " " + u[i];
+  }
+
+  function draw() {
+    if (!ctx || !canvas) return;
+    const w = canvas.clientWidth || 600, h = 160;
+    ctx.clearRect(0, 0, w, h);
+    ctx.strokeStyle = "rgba(255,255,255,0.06)";
+    ctx.lineWidth = 1;
+    for (let g = 1; g < 4; g++) {
+      const y = h * g / 4;
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    }
+    const all = down.concat(up);
+    const max = Math.max(1, ...all);
+    const step = w / (MAX - 1);
+    [{ data: down, color: "#4fd08a", fill: "rgba(79,208,138,0.18)" },
+     { data: up, color: "#e6b64f", fill: "rgba(230,182,79,0.18)" }].forEach((s) => {
+      if (s.data.length < 2) return;
+      const x0 = w - (s.data.length - 1) * step;
+      const yOf = (v) => h - (v / max) * (h - 12) - 6;
+      ctx.beginPath();
+      s.data.forEach((v, i) => { const x = x0 + i * step; i ? ctx.lineTo(x, yOf(v)) : ctx.moveTo(x, yOf(v)); });
+      ctx.lineTo(x0 + (s.data.length - 1) * step, h);
+      ctx.lineTo(x0, h);
+      ctx.closePath();
+      ctx.fillStyle = s.fill; ctx.fill();
+      ctx.beginPath();
+      s.data.forEach((v, i) => { const x = x0 + i * step; i ? ctx.lineTo(x, yOf(v)) : ctx.moveTo(x, yOf(v)); });
+      ctx.strokeStyle = s.color; ctx.lineWidth = 1.5; ctx.stroke();
+    });
+  }
+
+  function reset() {
+    down = []; up = [];
+    $("#tDown").textContent = "0 B/s";
+    $("#tUp").textContent = "0 B/s";
+    $("#tConns").textContent = "—";
+    $("#tDownTot").textContent = "0 B";
+    $("#tUpTot").textContent = "0 B";
+    draw();
+  }
+
+  function push(d) {
+    down.push(d.down_rate || 0);
+    up.push(d.up_rate || 0);
+    if (down.length > MAX) { down.shift(); up.shift(); }
+    $("#tDown").textContent = fmt(d.down_rate) + "/s";
+    $("#tUp").textContent = fmt(d.up_rate) + "/s";
+    $("#tConns").textContent = (d.conns == null ? "—" : d.conns);
+    $("#tDownTot").textContent = fmt(d.down_bytes || 0);
+    $("#tUpTot").textContent = fmt(d.up_bytes || 0);
+    draw();
+  }
+
+  async function poll() {
+    try {
+      const d = await api("/api/outlet/stats");
+      if (!d.running) {
+        $("#tHint").textContent = "未启用出口（「出口」页启动 WARP / sing-box 后显示）";
+        reset();
+        return;
+      }
+      $("#tHint").textContent = d.mode === "warp" ? "出口：Cloudflare WARP" : "出口：sing-box";
+      push(d);
+    } catch (e) { /* 401 等由 api 统一处理 */ }
+  }
+
+  function start() {
+    canvas = $("#trafficChart");
+    if (!canvas) return;
+    ctx = canvas.getContext("2d");
+    resize();
+    window.addEventListener("resize", resize);
+    if (timer) return;
+    timer = setInterval(poll, 1500);
+    poll();
+  }
+
+  return { start };
+})();
+
+boot();

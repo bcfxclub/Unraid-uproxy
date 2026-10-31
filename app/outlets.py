@@ -281,6 +281,8 @@ def _sb_config(cfg: st.AppCfg) -> dict:
     selected = cfg.outlet.sb_node if cfg.outlet.sb_node in tags else tags[0]
     return {
         "log": {"level": "warn"},
+        # 原生 api：供 WebUI 拉取实时连接数（只在 uproxy-net 内可达，不暴露到宿主）
+        "api": {"listen": "0.0.0.0:9099", "token": "uproxy"},
         "inbounds": [{
             "type": "mixed",
             "tag": "mixed-in",
