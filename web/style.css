@@ -720,6 +720,7 @@ table.data th { color: var(--muted); font-weight: 400; }
 .dpill.warn { color: var(--warn); border-color: rgba(230,182,79,0.35); background: var(--warn-soft); }
 .dpill.bad { color: var(--bad); border-color: rgba(224,106,90,0.35); background: var(--bad-soft); }
 .dpill.pin { color: var(--accent); border-color: rgba(230,182,79,0.35); background: var(--accent-soft); }
+.dpill.mute { color: var(--muted); border-color: var(--border); background: var(--card-2); }
 
 /* 卡片里的下拉：铺满，别被全局 min-width 撑爆 */
 .dselect {

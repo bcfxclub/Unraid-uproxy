@@ -1180,13 +1180,16 @@ function syncTestButtons() {
 
 /* 延迟结果的展示口径：HTTP 实测和 TCP 握手不能混为一谈 */
 function delayKind(r) {
-  if (!r || !r.reachable) return "bad";
+  if (!r) return "bad";
+  if (r.degraded) return "mute";
+  if (!r.reachable) return "bad";
   if (r.mode === "tcp") return r.ms < 300 ? "ok" : "warn";
   return r.ms < 800 ? "ok" : (r.ms < 2000 ? "warn" : "bad");
 }
 
 function delayText(r) {
   if (!r) return "—";
+  if (r.degraded) return "不可用";
   if (!r.reachable) return r.mode === "http" ? "失败" : "TIMEOUT";
   if (r.ms === null || r.ms === undefined) {
     return r.mode === "http" && r.code ? `HTTP ${r.code}` : "OK";
@@ -1196,6 +1199,7 @@ function delayText(r) {
 
 function delayTitle(r) {
   if (!r) return "";
+  if (r.degraded) return "当前环境没有 Docker，无法做 HTTP 实测（已降级为 TCP 握手）；部署到 Unraid 后才会显示真实出网延迟。";
   const head = r.mode === "http"
     ? `经该节点访问 ${r.url || "测试地址"}${r.code ? `（HTTP ${r.code}）` : ""} 的实际耗时`
     : "TCP 握手耗时（只连节点端口，不代表能出网）";
@@ -1235,6 +1239,7 @@ function groupProbeUrl(g) {
 function latShort(r, kind) {
   const tag = kind === "http" ? "HTTP" : "TCP";
   if (!r) return `${tag} —`;
+  if (r.degraded) return `${tag} 不可用`;
   if (!r.reachable) return `${tag} 超时`;
   if (r.ms === null || r.ms === undefined) {
     return `${tag} ${r.code ? `HTTP ${r.code}` : "OK"}`;
@@ -1245,6 +1250,7 @@ function latShort(r, kind) {
 /* 菜单里紧凑一点：不带前缀，前缀在行首统一给 */
 function msShort(r) {
   if (!r) return "—";
+  if (r.degraded) return "不可用";
   if (!r.reachable) return "超时";
   if (r.ms === null || r.ms === undefined) return r.mode === "http" && r.code ? `HTTP ${r.code}` : "OK";
   return `${r.ms}ms`;
@@ -1344,6 +1350,15 @@ async function runNodeTest(names, mode, url, opts) {
     delayMap[r.tag] = r;
     if (r.mode === "http") delayHttp[r.tag] = r; else delayTcp[r.tag] = r;
   });
+
+  // HTTP 实测被环境降级成 TCP（多半是没 Docker）：给 HTTP 那格一个明确的「不可用」，
+  // 而不是永远停在「HTTP …」。仍保留周期重试，Docker 恢复后会自动出真实数值。
+  if (mode === "http" && d.mode !== "http") {
+    const tset = new Set(names || res.map((x) => x.tag));
+    tset.forEach((nm) => {
+      delayHttp[nm] = { tag: nm, mode: "http", degraded: true, url: url, reachable: false, ms: null };
+    });
+  }
 
   // 全部测速完成 → 按延迟重排并落盘；单节点测速不动顺序，免得卡片乱跳
   // （首页测「当前分组」时传 opts.sort，顺序照样跟着最新结果走）
@@ -2601,7 +2616,7 @@ const Dash = (function () {
         ? delayTitle(r)
         : (cur ? `正在经「${cur}」实测 ${shortUrl(hUrl)}（分组探测地址）…`
           : "当前分组还没有可用节点");
-      if (!r && cur) probeHttpSoon([cur], hUrl, 600);
+      if (cur && (!r || r.degraded)) probeHttpSoon([cur], hUrl, 600);
     }
   }
 
@@ -3250,7 +3265,7 @@ const Dash = (function () {
       const h = httpAt(n.name, hUrl);
       const hm = el("div", "dlms http", h ? msShort(h) : "—");
       hm.title = h ? delayTitle(h) : `还没经这个节点实测 ${hUrl}，正在补测…`;
-      if (!h) missHttp.push(n.name);
+      if (!h || h.degraded) missHttp.push(n.name);
       row.appendChild(hm);
       row.addEventListener("click", () => safe(() => setActiveNode(n), "切换出口"));
       box.appendChild(row);
