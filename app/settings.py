@@ -38,9 +38,13 @@ CANDIDATES: dict[str, list[str]] = {
     ],
     "ca_proxy": [
         hpath("boot/config/plugins/community.applications/proxy.cfg"),
+        hpath("boot/config/community.applications/proxy.cfg"),
         hpath("config/plugins/community.applications/proxy.cfg"),
+        hpath("config/community.applications/proxy.cfg"),
         "/boot/config/plugins/community.applications/proxy.cfg",
+        "/boot/config/community.applications/proxy.cfg",
         "/config/plugins/community.applications/proxy.cfg",
+        "/config/community.applications/proxy.cfg",
     ],
     "go_file": [
         hpath("boot/config/go"),
