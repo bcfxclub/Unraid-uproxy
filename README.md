@@ -29,7 +29,7 @@ Unraid 上这四个位置互相独立、写法各异、且全在内存里（重�
 **一次性前提（维护者）**：仓库 `Settings → Packages → General`，把 Package Visibility 设为 **Public**（否则匿名 pull 会 403）。包名全小写 `bcfxclub/uproxy`。
 
 ```bash
-# 在 Unraid 终端（或在 Docker 页面填「存储库 ghcr.io/bcfxclub/uproxy:latest」+ WebUI http://[IP]:[PORT:8765]/ 手工创建）
+# 在 Unraid 终端（或在 Docker 页面填「存储库 bcfx/uproxy:latest」+ WebUI http://[IP]:[PORT:8765]/ 手工创建）
 mkdir -p /mnt/user/appdata/uproxy/state
 docker run -d --name uproxy --restart unless-stopped \
   -p 8765:8765 \
@@ -42,16 +42,16 @@ docker run -d --name uproxy --restart unless-stopped \
   -v /etc:/host/etc \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /mnt/user/appdata/uproxy/state:/config \
-  ghcr.io/bcfxclub/uproxy:latest
+  bcfx/uproxy:latest
 ```
 
 > `/etc:/host/etc` 用于写 `/etc/wgetrc`，让 Unraid **装插件 / 下载 txz** 也走代理（CA 商店的 `proxy.cfg` 管不到插件安装）。不需要这项功能可以不挂。
 
-> 更新只需 `docker pull ghcr.io/bcfxclub/uproxy:latest` 重建容器（配置全在 `state` 卷，不丢）。
-> 国内拉 GHCR 若慢，本项目本身就干这个的：先用现有出口把 dockerd 配好再 pull。
-> 若你更想用 Docker Hub，把镜像名换成 `bcfx/uproxy:latest` 即可（两个都自动推，等价）。
+> 更新只需 `docker pull bcfx/uproxy:latest` 重建容器（配置全在 `state` 卷，不丢）。
+> Docker Hub 镜像 `bcfx/uproxy:latest` 匿名可拉，无需令牌，推荐作为默认来源。
+> 备选：GHCR 镜像 `ghcr.io/bcfxclub/uproxy:latest`（同样自动构建，但需先在 GitHub 把包设为 Public 才能匿名拉）。
 
-### 方式〇'：从 Docker Hub 拉取（与 GHCR 等价）
+### 方式〇'：从 Docker Hub 拉取（默认推荐）
 
 ```bash
 # 同上，把最后一行的 ghcr.io/bcfxclub/uproxy:latest 换成 bcfx/uproxy:latest
@@ -232,7 +232,7 @@ cd repo && ./update.sh
 - **密码不对 / 登不进**：若从没在界面改过密码，重部署后密码以 `install.sh` 打印的为准（已被备份到 `state/.deploy_pw`）；若改过界面密码则永远以 `auth.json` 为准。忘记可删 `state/auth.json` 并重启容器回退到环境变量密码。
 
 - **sing-box / WARP 启动不了**：出口现在在容器内以**进程**方式运行（不再依赖宿主 docker 编排子容器）。报「未找到 sing-box 二进制」说明镜像版本旧，重新拉最新镜像即可：
-  `docker pull ghcr.io/bcfxclub/uproxy:latest`（或 `docker pull bcfx/uproxy:latest`）。
+  `docker pull bcfx/uproxy:latest`（Docker Hub，推荐，匿名可拉）。GHCR 源需先把包设为 Public：`docker pull ghcr.io/bcfxclub/uproxy:latest`。
   WARP 若提示「端口未就绪 / 需要 NET_ADMIN」，确认容器有 `NET_ADMIN` 能力且宿主机已加载 wireguard 内核模块（Unraid 6.10+ 自带）。
 
 - **Unraid 7.0+：用官方「出站代理管理器」接管（推荐）**：uproxy 启动 sing-box / WARP 后，
