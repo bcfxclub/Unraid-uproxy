@@ -747,6 +747,22 @@ async function setDisabled(names, disabled) {
   await loadState();
 }
 
+// 卡片上那颗「启用 / 停用」：点一下直接切
+function toggleNodeState(n) {
+  return setDisabled([n.name], !nodeDisSet().has(n.name));
+}
+
+// 点卡片 = 把出口切到这个节点；原本停用的会被一起启用（一次请求搞定）
+async function setActiveNode(n) {
+  const cur = nodeDisSet();
+  const wasOff = cur.has(n.name);
+  cur.delete(n.name);
+  const r = await api("/api/nodes", "POST", { node: n.name, disabled: Array.from(cur) });
+  if (r && r.ok === false) { toast(r.message || "切换失败"); return; }
+  toast(wasOff ? `已启用并切到「${n.name}」` : `出口已切到「${n.name}」`);
+  await loadState();
+}
+
 async function delNodes(names) {
   if (!names.length) { toast("请先选择节点"); return; }
   const tip = names.length === 1
@@ -783,24 +799,42 @@ async function renameNode(n) {
 }
 
 /* ---------------- 节点测速：HTTP 实测（真的走一遍） vs TCP 握手 ---------------- */
+/* 交互：先在「目标」菜单里选对象（只选不跑），再点「测速」按钮才执行 */
 const TEST_TARGET_KEY = "upx_test_target";
 const TEST_TARGETS = [
   { label: "Google", url: "https://www.gstatic.com/generate_204" },
   { label: "GitHub", url: "https://github.com/" },
   { label: "Cloudflare", url: "https://cloudflare.com/cdn-cgi/trace" },
+  { label: "TCP 握手（只看端口）", url: "", tcp: true },
 ];
+
+function shortUrl(u) { return (u || "").replace(/^https?:\/\//, "").replace(/\/$/, ""); }
 
 function testTarget() {
   let t = null;
   try { t = JSON.parse(localStorage.getItem(TEST_TARGET_KEY) || "null"); } catch (e) { t = null; }
-  return (t && t.url) ? t : { label: TEST_TARGETS[0].label, url: TEST_TARGETS[0].url };
+  if (!t || typeof t !== "object") return Object.assign({}, TEST_TARGETS[0]);
+  if (t.tcp) return { label: t.label || TEST_TARGETS[3].label, url: "", tcp: true };
+  return t.url ? { label: t.label || shortUrl(t.url), url: t.url } : Object.assign({}, TEST_TARGETS[0]);
 }
 
 function setTestTarget(t) {
   try { localStorage.setItem(TEST_TARGET_KEY, JSON.stringify(t)); } catch (e) { /* 隐私模式忽略 */ }
 }
 
-function shortUrl(u) { return (u || "").replace(/^https?:\/\//, "").replace(/\/$/, ""); }
+/* 把当前目标同步到工具栏两个按钮上 */
+function syncTestButtons() {
+  const t = testTarget();
+  const sel = $("#btnTestTarget");
+  if (sel) {
+    sel.textContent = `目标：${t.tcp ? "TCP 握手" : t.label} ▾`;
+    sel.title = t.tcp
+      ? "当前只测端口能否连上（不验证能否出网）· 点这里换目标"
+      : `当前目标 ${t.url} · 点这里换`;
+  }
+  const run = $("#btnNodeTest");
+  if (run) run.title = t.tcp ? "对全部节点做 TCP 握手测速" : `经每个节点真实访问 ${t.url}`;
+}
 
 /* 延迟结果的展示口径：HTTP 实测和 TCP 握手不能混为一谈 */
 function delayKind(r) {
@@ -828,22 +862,35 @@ function delayTitle(r) {
 
 async function runNodeTest(names, mode, url) {
   const one = names && names.length === 1;
-  const tgt = mode === "tcp" ? null : (url ? { label: shortUrl(url), url } : testTarget());
-  const scope = one ? names[0] : (names ? `${names.length} 个节点` : "全部节点");
-  const box = $("#subOut");
-  if (box) {
-    box.appendChild(el("div", "hint", mode === "tcp"
-      ? `正在握手测速（${scope}）…`
-      : `正在 HTTP 实测 → ${tgt.label}（${scope}），每个节点都要真连一次，请稍候…`));
-  }
-  const body = { mode, timeout: mode === "tcp" ? 3000 : 5000 };
+  const t = testTarget();
+  if (!mode) mode = t.tcp ? "tcp" : "http";
+  if (mode === "http" && !url) url = t.tcp ? TEST_TARGETS[0].url : t.url;
+  const tgt = mode === "http" ? { label: shortUrl(url), url: url } : null;
+
+  const body = { mode: mode, timeout: mode === "tcp" ? 3000 : 5000 };
   if (tgt) body.url = tgt.url;
   if (names) body.nodes = nodeCache.filter((x) => names.includes(x.name));
-  const d = await api("/api/subs/test", "POST", body);
+
+  // 结果只落在胶囊上；进度和汇总各用一条 toast，页面里不再堆文字
+  const btn = $("#btnNodeTest");
+  const label = btn ? btn.textContent : "";
+  if (btn && !names) { btn.disabled = true; btn.textContent = "测速中…"; }
+  toast(mode === "tcp"
+    ? `正在握手：${one ? names[0] : "全部节点"}…`
+    : `正在经节点访问 ${tgt.label}：${one ? names[0] : "全部节点"}…`);
+
+  let d;
+  try {
+    d = await api("/api/subs/test", "POST", body);
+  } finally {
+    if (btn && !names) { btn.disabled = false; btn.textContent = label; }
+  }
+
   const res = d.results || [];
   if (!names) delayMap = {};
   res.forEach((r) => { delayMap[r.tag] = r; });
   renderNodes();
+
   const up = res.filter((r) => r.reachable);
   if (one) {
     const r = res[0];
@@ -854,43 +901,42 @@ async function runNodeTest(names, mode, url) {
   }
   const best = up.length ? Math.min.apply(null, up.map((r) => r.ms)) : null;
   const head = d.mode === "http"
-    ? `HTTP 实测完成（${shortUrl(d.url)}）`
-    : (mode === "tcp" ? "TCP 握手完成" : "HTTP 实测跑不起来，已降级为 TCP 握手");
-  const line = `${head}：可用 ${up.length}/${res.length}` + (best !== null ? `，最快 ${best}ms` : "");
-  if (box) {
-    box.appendChild(el("div", "hint", line));
-    if (d.note) box.appendChild(el("div", "hint", `⚠ ${d.note}`));
-    const errs = res.filter((r) => !r.reachable && r.error).slice(0, 2);
-    errs.forEach((r) => box.appendChild(el("div", "hint", `${r.tag}：${r.error}`)));
-  }
+    ? `实测 ${shortUrl(d.url || (tgt && tgt.url))}`
+    : (mode === "tcp" ? "TCP 握手" : "本机无 Docker，已降级为 TCP 握手");
+  toast(`${head}：可用 ${up.length}/${res.length}` + (best !== null ? `，最快 ${best}ms` : ""));
 }
 
-async function customTestTarget() {
+async function editCustomTarget() {
   const cur = testTarget();
   const v = await Modal.ask({
     title: "自定义测速地址",
-    note: "填一个能正常返回内容的 https 地址；测的是「经该节点访问它」的往返耗时。",
-    value: cur.url,
+    note: "填一个能正常返回内容的 https 地址；测的是「经该节点访问它」的往返耗时。选好后点「测速」才开始。",
+    value: cur.tcp ? "" : cur.url,
     placeholder: "https://www.google.com/",
-    okText: "开始测速",
+    okText: "用它",
   });
   if (!v) return;
   let u = (v.value || "").trim();
   if (!u) return;
   if (!/^https?:\/\//i.test(u)) u = "https://" + u;
   setTestTarget({ label: shortUrl(u), url: u });
-  await runNodeTest(null, "http", u);
+  syncTestButtons();
+  toast(`目标已设为 ${shortUrl(u)}，点「测速」开始`);
 }
 
 function testMenuItems() {
   const cur = testTarget();
+  const same = (t) => (t.tcp ? !!cur.tcp : (!cur.tcp && cur.url === t.url));
   const items = TEST_TARGETS.map((t) => ({
-    label: `HTTP 实测 · ${t.label}${cur.url === t.url ? "  ✓" : ""}`,
-    onClick: () => safe(() => runNodeTest(null, "http", t.url), "测速"),
+    label: `${same(t) ? "✓ " : "　"}${t.label}`,
+    onClick: () => { setTestTarget(t); syncTestButtons(); },
   }));
-  items.push({ label: "HTTP 实测 · 自定义地址…", onClick: () => safe(customTestTarget, "测速") });
   items.push({ sep: true });
-  items.push({ label: "TCP 握手（快，仅端口可达）", onClick: () => safe(() => runNodeTest(null, "tcp"), "测速") });
+  const custom = !cur.tcp && !TEST_TARGETS.some((t) => t.url === cur.url);
+  items.push({
+    label: custom ? `✓ 自定义：${shortUrl(cur.url)}` : "自定义地址…",
+    onClick: () => safe(editCustomTarget, "测速目标"),
+  });
   return items;
 }
 
@@ -933,10 +979,14 @@ function renderNodeGrid() {
     if (defaultNode === n.name) card.classList.add("active");
     if (nodeSel.has(n.name)) card.classList.add("sel");
     card.setAttribute("data-n", n.name);
+    card.title = disabled
+      ? "当前是停用状态 · 点卡片会启用它并切为默认出口"
+      : "点卡片把出口切到它";
 
     const head = el("div", "nc-head");
     const chk = el("input");
     chk.type = "checkbox";
+    chk.title = "勾选用于批量操作（启用 / 停用 / 删除 / 分享）";
     chk.checked = nodeSel.has(n.name);
     chk.addEventListener("change", () => {
       if (chk.checked) nodeSel.add(n.name); else nodeSel.delete(n.name);
@@ -945,6 +995,7 @@ function renderNodeGrid() {
     });
     head.appendChild(chk);
     head.appendChild(el("div", "nc-name", n.name));
+    if (defaultNode === n.name) head.appendChild(el("span", "nc-def", "默认"));
     head.appendChild(dotsBtn((btn) => Pop.toggle(btn, nodeMenuItems(n))));
     head.appendChild(icoDel("删除此节点", () => safe(() => delNodes([n.name]), "删除节点")));
     card.appendChild(head);
@@ -952,6 +1003,14 @@ function renderNodeGrid() {
     const meta = el("div", "nc-meta");
     meta.appendChild(el("span", "nc-type", n.type));
     meta.appendChild(el("span", "nc-src", n.source || "本地"));
+    // 启用 / 停用状态：直接显示在卡片上，点一下立刻切换
+    const st = el("span", `nc-state ${disabled ? "bad" : "ok"}`, disabled ? "停用" : "启用");
+    st.title = disabled ? "点一下启用这个节点" : "点一下停用这个节点";
+    st.addEventListener("click", (e) => {
+      e.stopPropagation();
+      safe(() => toggleNodeState(n), "切换节点");
+    });
+    meta.appendChild(st);
     card.appendChild(meta);
     card.appendChild(el("div", "nc-addr", `${n.server}:${n.port}`));
 
@@ -960,10 +1019,10 @@ function renderNodeGrid() {
     delayEl.title = delayTitle(d);
     card.appendChild(delayEl);
 
+    // 点卡片 = 把出口切到它（顺带启用）；批量勾选交给左边的小方框
     card.addEventListener("click", (e) => {
-      if (e.target.tagName === "INPUT" || e.target.classList.contains("dots")) return;
-      chk.checked = !chk.checked;
-      chk.dispatchEvent(new Event("change"));
+      if (e.target.closest("input, button, .dots, .nc-state")) return;
+      safe(() => setActiveNode(n), "切换出口");
     });
     box.appendChild(card);
   });
@@ -1007,6 +1066,11 @@ function renderNodeTable(nodes, sbNode) {
     row.appendChild(nameTd);
 
     row.appendChild(el("td")).appendChild(pill(dis.has(n.name) ? "停用" : "启用", dis.has(n.name) ? "bad" : "ok"));
+    const stTd = row.lastChild;
+    const stPill = stTd.firstChild;
+    stPill.style.cursor = "pointer";
+    stPill.title = dis.has(n.name) ? "点一下启用这个节点" : "点一下停用这个节点";
+    stPill.addEventListener("click", () => safe(() => toggleNodeState(n), "切换节点"));
     row.appendChild(el("td", "", n.source || "本地"));
     row.appendChild(el("td")).appendChild(pill(n.type, "mute"));
 
@@ -1051,13 +1115,14 @@ function renderNodes() {
   const gridOn = nodeState.view === "grid";
   $("#nodeGrid").style.display = gridOn ? "" : "none";
   $("#nodeTableWrap").style.display = gridOn ? "none" : "block";
-  $("#btnNodeGrid").classList.toggle("primary", gridOn);
-  $("#btnNodeList").classList.toggle("primary", !gridOn);
+  $("#btnNodeGrid").classList.toggle("on", gridOn);
+  $("#btnNodeList").classList.toggle("on", !gridOn);
   if (gridOn) {
     renderNodeGrid();
   }
   // 列表 tbody 始终渲染（隐藏也不影响测速写回）
   renderNodeTable(nodeCache, cfg?.sb_node || "");
+  syncTestButtons();
 }
 
 $("#nodeSearch").addEventListener("input", (e) => { nodeState.q = e.target.value; if (nodeState.view === "grid") renderNodeGrid(); else renderNodeTable(nodeCache, STATE?.config?.outlet?.sb_node || ""); });
@@ -1065,9 +1130,11 @@ $("#nodeSource").addEventListener("change", (e) => { nodeState.source = e.target
 $("#btnNodeGrid").addEventListener("click", () => { nodeState.view = "grid"; renderNodes(); });
 $("#btnNodeList").addEventListener("click", () => { nodeState.view = "list"; renderNodes(); });
 
-$("#btnNodeTest").addEventListener("click", (e) => {
+$("#btnTestTarget").addEventListener("click", (e) => {
   Pop.toggle(e.currentTarget, testMenuItems());
 });
+
+$("#btnNodeTest").addEventListener("click", () => safe(() => runNodeTest(null), "测速"));
 
 /* ---------------- 批量选择 / 批量操作 ---------------- */
 $("#nodeSelAll").addEventListener("change", (e) => {

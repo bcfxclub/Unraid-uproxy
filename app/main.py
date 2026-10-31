@@ -309,14 +309,25 @@ def api_route_save(req: RouteReq):
                  f"{'走代理' if final == 'proxy' else '直连'}")
 
     msg = f"已保存 {len(rules)} 条规则（{sum(len(r['values']) for r in rules)} 个匹配项）"
+    restarted = False
     if req.restart:
         try:
             r = outlets.sb_start(cfg)
         except ValueError as e:
             r = {"ok": False, "message": str(e)}
-        msg += "，sing-box 已按新规则重启" if r.get("ok") else f"；但 sing-box 没能重启：{r.get('message', '')}"
-        uplog.append("info" if r.get("ok") else "error", "singbox", msg)
-    return {"ok": True, "message": msg, "warnings": warn, "rules": rules}
+        restarted = bool(r.get("ok"))
+        if restarted:
+            msg += "，sing-box 已按新规则重启"
+            uplog.append("info", "singbox", msg)
+        elif r.get("nodocker"):
+            # 本地预览 / 没有 docker 的环境：规则存下来了，别吓唬用户说「配置被拒」
+            msg += "；当前环境没有 Docker，无法立刻重启出口（规则已存盘，部署到 Unraid 后生效）"
+            uplog.append("warn", "singbox", "分流规则已保存；本机无 docker，未重启 sing-box")
+        else:
+            msg += f"；但 sing-box 没能重启：{r.get('message', '')}"
+            uplog.append("error", "singbox", msg)
+    return {"ok": True, "message": msg, "warnings": warn, "rules": rules,
+            "restarted": restarted}
 
 
 @app.post("/api/route/test", dependencies=[Depends(guard)])

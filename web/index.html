@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>uproxy · Unraid 出网加速</title>
-<link rel="stylesheet" href="/static/style.css?v=26">
+<link rel="stylesheet" href="/static/style.css?v=30">
 </head>
 <body>
 
@@ -189,7 +189,7 @@
     </div>
 
     <div class="card">
-      <h2>节点管理 <span class="tag">按订阅来源分组 · 勾选启用 / 选默认出口 / HTTP 实测</span></h2>
+      <h2>节点管理 <span class="tag">点卡片切出口 · 点「启用/停用」切换 · 勾选框批量操作 · HTTP 实测</span></h2>
       <div class="row wrap">
         <input id="nodeSearch" placeholder="搜索节点…" style="max-width:180px">
         <label class="lbl" style="margin:0">来源</label>
@@ -204,8 +204,9 @@
         <button id="btnNodeDisableSel" class="mini" disabled>停用</button>
         <button id="btnNodeRestore" class="mini" hidden>恢复已删除</button>
         <span class="grow"></span>
-        <button id="btnNodeTest" title="HTTP 实测：经每个节点真实访问 Google / GitHub">测速 ▾</button>
-        <button id="btnNodeGrid" class="primary" title="网格视图">▦</button>
+        <button id="btnTestTarget" title="选择测速对象：选好后再点右边「测速」">目标：Google &#9662;</button>
+        <button id="btnNodeTest" class="primary" title="按当前目标实测全部节点">测速</button>
+        <button id="btnNodeGrid" class="on" title="网格视图">▦</button>
         <button id="btnNodeList" title="列表视图">☰</button>
       </div>
       <div id="nodeGrid" class="nodegrid"></div>
@@ -427,6 +428,6 @@
 </div>
 
 <div id="toast" class="toast"></div>
-<script src="/static/app.js?v=26"></script>
+<script src="/static/app.js?v=30"></script>
 </body>
 </html>

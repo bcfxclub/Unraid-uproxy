@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import socket
 
 from . import host
@@ -422,23 +423,44 @@ def _run_with_conf(name: str, image: str, conf: dict, cmd: list[str],
     return out
 
 
+def docker_path() -> str:
+    """docker 命令行在哪。找不到说明当前不是真正的部署环境（比如本地预览）。"""
+    return shutil.which("docker") or ""
+
+
+def docker_available() -> bool:
+    return bool(docker_path())
+
+
 def sb_check(cfg: st.AppCfg, conf: dict | None = None) -> dict:
     """用目标镜像自带的 `sing-box check` 先验证一遍配置，避免起一个秒退的容器。"""
+    if not docker_available():
+        return {"ok": False, "nodocker": True,
+                "message": "当前环境没有 docker 命令行，无法校验/启动 sing-box"}
     conf = conf if conf is not None else _sb_config(cfg)
     r = _run_with_conf(f"{SB_NAME}-check", cfg.outlet.sb_image, conf,
                        ["check", "-c", CONF_IN_CONTAINER],
                        network="none", timeout=150)
     msg = (r.get("err") or r.get("out") or "").strip()
+    # 127 = 命令都没跑起来；这不是「配置被拒」，别把用户引到错误方向
+    if r["rc"] == 127 or "WinError 2" in msg:
+        return {"ok": False, "nodocker": True,
+                "message": "当前环境没有 docker 命令行，无法校验/启动 sing-box"}
     return {"ok": r["rc"] == 0, "message": msg[:800]}
 
 
 def sb_start(cfg: st.AppCfg) -> dict:
+    if not docker_available():
+        return {"ok": False, "nodocker": True,
+                "message": "当前环境没有 docker 命令行，规则已保存，部署到 Unraid 后重启出口即可生效"}
     _ensure_net()
     conf = _sb_config(cfg)
 
     # 先校验再启动：配置被拒时容器会不停重启，用户只会看到「启动了但连不上」
     chk = sb_check(cfg, conf)
     if not chk["ok"]:
+        if chk.get("nodocker"):
+            return {"ok": False, "nodocker": True, "message": chk["message"]}
         return {"ok": False, "message": "sing-box 拒绝了这份配置：" + (chk["message"] or "未知原因")}
 
     extra = ["--restart", "unless-stopped"]

@@ -18,19 +18,27 @@
   --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Cascadia Code", monospace;
 }
 * { box-sizing: border-box; }
-html, body { height: 100%; }
+/* 只给 html 定高：body 必须能跟着内容长高，否则 sticky 侧栏没有可吸附的高度 */
+html { height: 100%; }
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
   font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   display: flex;
+  /* 关键：不要给 body 定高，也不要 align-items:stretch。
+     让 body 跟着内容长高，侧栏才能在自己的"整页高度"里 sticky 住——
+     body 一旦只有一屏高，滚动时侧栏就会跟着滚走（就是之前"菜单不见了"的原因）。 */
+  align-items: flex-start;
+  min-height: 100vh;
 }
 
 /* ---------------- 侧边栏 ---------------- */
+/* 一直贴在视口里：整页滚到哪都能看到完整菜单，底部也不会缺一截 */
 .sidebar {
   width: 232px;
   flex: 0 0 232px;
+  align-self: flex-start;
   background: var(--sidebar);
   border-right: 1px solid var(--line);
   display: flex;
@@ -38,6 +46,8 @@ body {
   position: sticky;
   top: 0;
   height: 100vh;
+  overflow: hidden;
+  z-index: 10;
 }
 .brand {
   display: flex;
@@ -347,14 +357,28 @@ table.data th { color: var(--muted); font-weight: 400; }
   display: flex; flex-direction: column; gap: 6px;
 }
 .node-card:hover { border-color: var(--muted); }
-.node-card.active { border-color: var(--accent); background: rgba(230,182,79,0.06); }
-.node-card.off { opacity: 0.45; }
+/* 正在用的出口：金色边框 + 浅底，和「勾选中」明确区分 */
+.node-card.active { border-color: var(--accent); background: rgba(230,182,79,0.07); box-shadow: 0 0 0 1px var(--accent) inset; }
+.node-card.off { opacity: 0.55; }
 .nc-head { display: flex; align-items: center; gap: 6px; }
 .nc-head input[type=checkbox] { flex: 0 0 auto; width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
 .nc-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nc-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .nc-type, .nc-src { font-size: 11px; padding: 1px 7px; border-radius: 6px; background: var(--card-2); color: var(--muted); }
 .nc-src { color: var(--accent); background: rgba(230,182,79,0.10); }
+/* 启用 / 停用：可点，点了立刻变 */
+.nc-state {
+  font-size: 11px; padding: 1px 8px; border-radius: 6px; cursor: pointer;
+  border: 1px solid transparent; user-select: none; white-space: nowrap;
+}
+.nc-state.ok { color: var(--ok); background: var(--ok-soft); }
+.nc-state.bad { color: var(--bad); background: var(--bad-soft); }
+.nc-state:hover { border-color: currentColor; }
+/* 默认出口角标 */
+.nc-def {
+  flex: 0 0 auto; font-size: 10px; font-weight: 600; letter-spacing: .3px;
+  padding: 1px 6px; border-radius: 5px; color: #1a1609; background: var(--accent);
+}
 .nc-addr { font-size: 11px; color: var(--muted); font-family: var(--mono); }
 .nc-delay { font-size: 13px; font-family: var(--mono); color: var(--muted); align-self: flex-start; }
 /* 三种结果做成同一种小胶囊，避免只有慢/失败着色、好看的反而没底色 */
@@ -503,7 +527,9 @@ table.data th { color: var(--muted); font-weight: 400; }
 .modal-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 
 /* 选中态 */
-.node-card.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+/* 批量勾选：中性蓝灰细描边，别和「默认出口」的金色撞在一起 */
+.node-card.sel { border-color: #6f8fb5; box-shadow: 0 0 0 1px #6f8fb5 inset; }
+.node-card.sel.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 .tr-off, tr.off { opacity: .5; }
 
 /* ---------------- 可折叠表单区 ---------------- */
@@ -569,3 +595,6 @@ table.data th { color: var(--muted); font-weight: 400; }
 .ruleitem .ico.fold-btn { font-size: 12px; color: var(--text); width: 24px; }
 .ruleitem .ico.fold-btn:hover { background: var(--card); }
 .grow.rule-gap { cursor: pointer; min-height: 22px; }
+
+/* 视图切换：用中性的“选中”底色，别和右侧主按钮抢金色 */
+.listbar button.on { background: var(--card-2); color: var(--text); border-color: var(--muted); }
