@@ -45,6 +45,10 @@
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 5h16M4 10h16M4 15h10M4 20h7"/></svg>
       <span>日志</span>
     </button>
+    <button data-tab="account">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg>
+      <span>账号</span>
+    </button>
     <button data-tab="docs">
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3h9l4 4v14H6z"/><path d="M9 11h6M9 15h6"/></svg>
       <span>文档</span>
@@ -320,6 +324,36 @@
   </section>
 
   <!-- ============ 文档 ============ -->
+  <section id="tab-account">
+    <div class="card">
+      <h2>账号与安全 <span class="tag">登录凭据保存在状态目录的 auth.json</span></h2>
+      <div id="acctStatus" class="out"></div>
+
+      <label class="lbl">用户名</label>
+      <div class="row"><input id="acctUser" placeholder="admin" style="max-width:220px" autocomplete="username"></div>
+
+      <label class="lbl" id="acctOldLbl">原密码（修改时必须验证）</label>
+      <div class="row"><input id="acctOld" type="password" placeholder="当前密码" style="max-width:220px" autocomplete="current-password"></div>
+
+      <label class="lbl">新密码</label>
+      <div class="row"><input id="acctNew" type="password" placeholder="至少 8 位" style="max-width:220px" autocomplete="new-password"></div>
+
+      <label class="lbl">确认新密码</label>
+      <div class="row"><input id="acctNew2" type="password" placeholder="再输一遍" style="max-width:220px" autocomplete="new-password"></div>
+
+      <div class="row wrap" style="margin-top:12px">
+        <button id="btnAcctSave" class="primary">保存</button>
+        <button id="btnAcctGen">生成随机密码</button>
+      </div>
+
+      <div class="acct-hint">
+        <p><b>密码优先级</b>：界面里设置的 <code>auth.json</code> &gt; 环境变量 <code>UPX_PASSWORD</code> &gt; 未设置则开放访问。</p>
+        <p><b>保存后</b>所有其它设备上的登录会话立即失效，需要重新登录；当前页面会自动续上，不用重登。</p>
+        <p><b>忘记密码</b>：删掉状态目录下的 <code>auth.json</code> 再重启容器，即回退到环境变量里的密码（或开放访问）。</p>
+      </div>
+    </div>
+  </section>
+
   <section id="tab-docs">
     <div class="card doc">
       <div class="toc">

@@ -124,7 +124,13 @@ app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 # --------------------------------------------------------------------------
 @app.get("/api/auth/info", include_in_schema=False)
 def api_auth_info():
-    return {"ok": True, "required": auth.REQUIRED, "user": auth.USER if auth.REQUIRED else ""}
+    return {
+        "ok": True,
+        "required": auth.REQUIRED,
+        "user": auth.USER if auth.REQUIRED else "",
+        "source": auth.SOURCE,          # file（界面改过）/ env（环境变量）/ open（未设密码）
+        "min_len": auth.MIN_LEN,
+    }
 
 
 @app.post("/api/login", include_in_schema=False)
@@ -139,6 +145,25 @@ def api_login(data: dict):
 def api_logout(x_upx_token: str | None = Header(default=None)):
     auth.logout(x_upx_token)
     return {"ok": True}
+
+
+class PassReq(BaseModel):
+    old: str = ""        # 已启用登录时必填，用于校验是本人操作
+    user: str = ""       # 不传 = 沿用当前用户名
+    password: str = ""
+
+
+@app.post("/api/auth/password", dependencies=[Depends(guard)])
+def api_auth_password(req: PassReq):
+    """改用户名/密码。未启用登录（open）时可直接设置，作为首次加固入口。"""
+    if auth.REQUIRED and not auth.verify(req.old):
+        raise HTTPException(status_code=400, detail="原密码不正确")
+    try:
+        tok = auth.change(req.user or auth.USER, req.password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    uplog.append("warn", "auth", f"账号凭据已更新（用户 {auth.USER}），旧会话全部失效")
+    return {"ok": True, "token": tok, "user": auth.USER, "source": auth.SOURCE}
 
 
 # --------------------------------------------------------------------------

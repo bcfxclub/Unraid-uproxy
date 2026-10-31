@@ -73,6 +73,7 @@ async function doLogin() {
     await loadState();
     loadBackups().catch(() => {});
     Traffic.start();
+    if (typeof Account !== "undefined") Account.boot();
   } catch (e) {
     $("#loginErr").textContent = e.message || "登录失败";
   }
@@ -128,7 +129,7 @@ function pill(text, kind) {
 function clear(node) { node.textContent = ""; }
 
 /* ---------------- tabs（侧边栏） ---------------- */
-const TITLES = { overview: "概览", outlet: "出口", subs: "订阅", push: "下发", backup: "备份与还原", docs: "文档" };
+const TITLES = { overview: "概览", outlet: "出口", subs: "订阅", push: "下发", backup: "备份与还原", logs: "日志", account: "账号", docs: "文档" };
 function switchTab(name) {
   const btn = $$(".nav button").find((x) => x.dataset.tab === name);
   if (!btn) return;
@@ -798,6 +799,93 @@ $("#btnUninstall").addEventListener("click", () => safe(async () => {
   await loadState();
 }, "卸载"));
 
+/* ---------------- 账号与安全（改用户名 / 密码） ---------------- */
+const Account = (function () {
+  const SRC = {
+    file: ["已启用 · 界面设置", "ok"],
+    env: ["已启用 · 环境变量", "ok"],
+    open: ["未启用 · 任何人可访问", "bad"],
+  };
+  let info = { required: false, user: "", source: "open", min_len: 8 };
+
+  function render() {
+    const box = $("#acctStatus");
+    if (!box) return;
+    clear(box);
+    const s = SRC[info.source] || SRC.open;
+    const row = el("div", "row wrap");
+    row.append(
+      el("span", "lbl", "当前状态"),
+      pill(s[0], s[1]),
+      el("span", "muted", info.required ? `当前用户 ${info.user}` : "未设密码，打开即用"),
+    );
+    box.append(row);
+
+    const oldLbl = $("#acctOldLbl"), oldInput = $("#acctOld");
+    if (oldLbl) oldLbl.style.display = info.required ? "" : "none";
+    if (oldInput) {
+      oldInput.style.display = info.required ? "" : "none";
+      oldInput.value = "";
+    }
+    const u = $("#acctUser");
+    if (u && !u.value) u.value = info.user || "admin";
+  }
+
+  // 去掉容易混淆的 0/O/1/l/I，16 位约 95 bit 熵
+  function gen() {
+    const AB = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    const bytes = new Uint8Array(16);
+    if (window.crypto && crypto.getRandomValues) {
+      crypto.getRandomValues(bytes);
+    } else {
+      for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    }
+    let out = "";
+    for (const b of bytes) out += AB[b % AB.length];
+    $("#acctNew").value = out;
+    $("#acctNew2").value = out;
+    toast(`已生成随机密码：${out}`);
+  }
+
+  async function save() {
+    const user = ($("#acctUser").value || "").trim() || "admin";
+    const old = $("#acctOld").value;
+    const p = $("#acctNew").value;
+    const p2 = $("#acctNew2").value;
+    const min = info.min_len || 8;
+
+    if (!p) { toast("请填写新密码"); $("#acctNew").focus(); return; }
+    if (p.length < min) { toast(`新密码至少 ${min} 位`); $("#acctNew").focus(); return; }
+    if (p !== p2) { toast("两次输入的密码不一致"); $("#acctNew2").focus(); return; }
+    if (info.required && !old) { toast("请先填写原密码"); $("#acctOld").focus(); return; }
+
+    const d = await api("/api/auth/password", "POST", { old, user, password: p });
+    setSession(d.token);
+    const who = $("#who");
+    if (who) who.textContent = d.user || user;
+    $("#acctOld").value = ""; $("#acctNew").value = ""; $("#acctNew2").value = "";
+    toast("已保存，其它设备需重新登录");
+    await boot();
+  }
+
+  async function boot() {
+    try {
+      info = await (await fetch("/api/auth/info")).json();
+    } catch (e) { /* 保持默认，不阻塞页面 */ }
+    render();
+  }
+
+  $("#btnAcctSave").addEventListener("click", () => safe(save, "保存账号"));
+  $("#btnAcctGen").addEventListener("click", () => gen());
+  $("#acctNew2").addEventListener("keydown", (e) => { if (e.key === "Enter") safe(save, "保存账号"); });
+
+  // 每次切到「账号」页都重新读一次状态（登录前后状态不同）
+  const navBtn = document.querySelector('.nav button[data-tab="account"]');
+  if (navBtn) navBtn.addEventListener("click", () => { boot(); });
+
+  return { boot };
+})();
+
 /* ---------------- 启动：先看是否要登录 ---------------- */
 async function boot() {
   let info = { required: false };
@@ -820,6 +908,7 @@ async function boot() {
   loadBackups().catch(() => {});
   Traffic.start();
   if (typeof LogPage !== "undefined") LogPage.boot();
+  if (typeof Account !== "undefined") Account.boot();
 }
 
 /* ---------------- 实时流量图（仿 v2rayA） ---------------- */
