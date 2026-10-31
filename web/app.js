@@ -447,6 +447,7 @@ bindSave("#emhttpProxy", (n) => ({ emhttp_proxy: n.checked }));
 /* ---------------- 连通性体检（打开即自动测，间隔可改并记住） ---------------- */
 const HEALTH_INT_KEY = "upx_health_int";
 let healthTimer = null;
+let healthView = null;   // { names:[...], proxy:bool, rows:[{dPill,dMs,vPill,vMs}] } —— 结构不变就只更新数字，避免整表重建闪烁
 
 function healthIntervalVal() {
   let v = 30000;   // 默认 30s
@@ -457,40 +458,72 @@ function healthIntervalVal() {
   return v;
 }
 
-async function runHealth() {
-  const out = $("#healthOut");
-  if (!out) return;
-  clear(out);
-  out.appendChild(el("div", "hint", "正在探测…"));
-  const proxy = $("#healthViaProxy").checked ? (STATE?.probe?.outlet_url || "") : "";
-  let d;
-  try {
-    d = await api(`/api/health?proxy=${encodeURIComponent(proxy)}`);
-  } catch (e) {
-    clear(out);
-    out.appendChild(el("div", "hint bad", `体检失败：${e.message}`));
-    return;
-  }
+function setPill(td, text, kind) {
+  clear(td);
+  td.appendChild(pill(text, kind));
+}
+
+// 结构级渲染：清空重建整张表（仅在目标集合或代理开关变化时才走这里）
+function renderHealthTable(out, d, proxy) {
   clear(out);
   const table = el("table", "data");
   const tr = el("tr");
   ["目标", "直连", "耗时", "走代理", "耗时"].forEach((h) => tr.appendChild(el("th", "", h)));
   table.appendChild(tr);
-  d.direct.forEach((r, i) => {
+  const body = el("tbody");
+  const rows = [];
+  d.direct.forEach((r) => {
     const row = el("tr");
     row.appendChild(el("td", "", r.name));
-    row.appendChild(el("td")).appendChild(pill(r.ok ? r.code : `失败 ${r.code}`, r.ok ? "ok" : "bad"));
-    row.appendChild(el("td", "mono", r.ms === null ? "-" : `${r.ms}ms`));
-    const v = d.via_proxy[i];
-    row.appendChild(el("td")).appendChild(
-      v ? pill(v.ok ? v.code : `失败 ${v.code}`, v.ok ? "ok" : "bad") : pill("-", "mute"));
-    row.appendChild(el("td", "mono", v && v.ms !== null ? `${v.ms}ms` : "-"));
-    table.appendChild(row);
+    const dPill = el("td"); row.appendChild(dPill);
+    const dMs = el("td", "mono"); row.appendChild(dMs);
+    const vPill = el("td"); row.appendChild(vPill);
+    const vMs = el("td", "mono"); row.appendChild(vMs);
+    body.appendChild(row);
+    rows.push({ dPill, dMs, vPill, vMs });
   });
+  table.appendChild(body);
   out.appendChild(table);
   if (!proxy) out.appendChild(el("div", "hint", "勾选「同时测走代理」可对比加速效果。"));
+  updateHealthRows(rows, d);
+  return { names: d.direct.map((r) => r.name), proxy, rows };
+}
+
+// 数值级更新：只改单元格里的胶囊/数字，不动 DOM 结构（数值变化页面不变化）
+function updateHealthRows(rows, d) {
+  d.direct.forEach((r, i) => {
+    const rr = rows[i];
+    if (!rr) return;
+    setPill(rr.dPill, r.ok ? r.code : `失败 ${r.code}`, r.ok ? "ok" : "bad");
+    rr.dMs.textContent = r.ms === null ? "-" : `${r.ms}ms`;
+    const v = d.via_proxy[i];
+    setPill(rr.vPill, v ? (v.ok ? v.code : `失败 ${v.code}`) : "-", v ? (v.ok ? "ok" : "bad") : "mute");
+    rr.vMs.textContent = v && v.ms !== null ? `${v.ms}ms` : "-";
+  });
+}
+
+async function runHealth() {
+  const out = $("#healthOut");
+  if (!out) return;
+  const proxy = $("#healthViaProxy").checked ? (STATE?.probe?.outlet_url || "") : "";
   const foot = $("#healthFoot");
-  if (foot) { foot.style.display = ""; foot.textContent = `最近更新 ${new Date().toLocaleTimeString()}`; }
+  if (foot) { foot.style.display = ""; foot.textContent = "正在探测…"; }
+  let d;
+  try {
+    d = await api(`/api/health?proxy=${encodeURIComponent(proxy)}`);
+  } catch (e) {
+    if (foot) foot.textContent = `体检失败：${e.message}`;
+    return;            // 出错保留上一次的好数据，不重建表格
+  }
+  const names = d.direct.map((r) => r.name);
+  // 结构（目标集合 / 代理开关）没变就只更新数字；变了才重建整表
+  if (!healthView || healthView.proxy !== proxy || healthView.names.length !== names.length ||
+      healthView.names.some((n, i) => n !== names[i])) {
+    healthView = renderHealthTable(out, d, proxy);
+  } else {
+    updateHealthRows(healthView.rows, d);
+  }
+  if (foot) foot.textContent = `最近更新 ${new Date().toLocaleTimeString()}`;
 }
 
 function startHealthLoop() {
