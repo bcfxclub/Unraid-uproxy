@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import re
@@ -506,7 +507,8 @@ def _dedupe(nodes: list[dict]) -> list[dict]:
 
 
 def sync_subscriptions(subscriptions: list[dict], ua: str = "clash.meta",
-                       previous: list[dict] | None = None) -> dict:
+                       previous: list[dict] | None = None,
+                       refresh: list[str] | None = None) -> dict:
     """拉取并合并所有「启用」的订阅源。
 
     返回 {ok, nodes, summary, unsupported}。单个源失败不影响其他源，
@@ -514,12 +516,17 @@ def sync_subscriptions(subscriptions: list[dict], ua: str = "clash.meta",
 
     ``previous`` 传入上一次的节点集：某个源这次拉取失败时，会沿用该源上次的节点，
     避免「网络抖一下就把节点全清空」。只有拉取成功才替换。
+
+    ``refresh`` 只重新联网拉这几个源（给 id / 地址 / 备注名），其余源直接沿用
+    ``previous`` 里的节点、不发请求。单独点某个订阅的「更新」时用它：既不会为了
+    一个源把全部订阅重下一遍（等十几秒），也不会动到别的订阅的节点。
     """
     summary: list[dict] = []
     merged: list[dict] = []
     unsupported: set[str] = set()
     any_ok = False
     prev = previous or []
+    only = None if refresh is None else {str(x).strip() for x in refresh if str(x).strip()}
 
     def _keep_prev(source_name: str) -> list[dict]:
         return [dict(n) for n in prev if (n.get("source") or "") == source_name]
@@ -548,7 +555,31 @@ def sync_subscriptions(subscriptions: list[dict], ua: str = "clash.meta",
                             "message": f"本地粘贴 {len(stored)} 个节点" if stored else "本地内容为空",
                             "count": len(stored)})
             continue
-        got = fetch(url, sub.get("ua") or ua, proxy=sub.get("proxy") or "", retries=3)
+        # 只更新指定源时，别的源不联网：直接沿用它上次的节点。
+        # 有 id 的按 id 认（同一个地址挂两遍也只更新点的那条），早期没 id 的按地址/备注名认
+        skip_name = sub.get("name") or url
+        if only is not None:
+            hit = ((sub.get("id") or "") in only) if sub.get("id") else bool(
+                {(sub.get("url") or ""), (sub.get("name") or "")} & only)
+            if not hit:
+                kept = _keep_prev(skip_name)
+                merged += kept
+                summary.append({"name": sub.get("name", ""), "url": url, "ok": None,
+                                "reused": True, "message": f"沿用上次的 {len(kept)} 个节点",
+                                "count": len(kept)})
+                continue
+        ua_one = sub.get("ua") or ua
+        px = sub.get("proxy") or ""
+        # 正文和用量头是两次 curl：并发跑，别先等正文再等头（每条订阅省一半时间）
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            fut_usage = pool.submit(usage_of, url, ua_one, px)
+            got = fetch(url, ua_one, proxy=px, retries=3)
+            usage = {}
+            if got["ok"]:
+                try:
+                    usage = fut_usage.result()
+                except Exception:
+                    usage = {}
         source_name = sub.get("name") or url
         if not got["ok"]:
             kept = _keep_prev(source_name)
@@ -570,15 +601,17 @@ def sync_subscriptions(subscriptions: list[dict], ua: str = "clash.meta",
         any_ok = True
         summary.append({"name": sub.get("name", ""), "url": url, "ok": True,
                         "message": parsed["message"], "count": len(parsed["nodes"]),
-                        "attempt": got.get("attempt", 1),
-                        "usage": usage_of(url, sub.get("ua") or ua, proxy=sub.get("proxy") or "")})
+                        "attempt": got.get("attempt", 1), "usage": usage})
     nodes = _dedupe(merged)
+    live = sum(1 for s in summary if s.get("ok"))
+    reused = sum(1 for s in summary if s.get("reused"))
+    tail = f"来自 {live} 个可用订阅" + (f"，{reused} 个沿用上次" if reused else "")
     return {
         "ok": any_ok,
         "nodes": nodes,
         "summary": summary,
         "unsupported": sorted(unsupported),
-        "message": f"合并 {len(nodes)} 个节点（来自 {sum(1 for s in summary if s.get('ok'))} 个可用订阅）",
+        "message": f"合并 {len(nodes)} 个节点（{tail}）",
     }
 
 

@@ -582,10 +582,14 @@ def _node_view(n: dict) -> dict:
             "source": n.get("source", "")}
 
 
-def _resync(cfg: st.AppCfg) -> dict:
-    """用当前所有「启用」的订阅源重新拉取并合并节点，写回 sb_nodes。"""
+def _resync(cfg: st.AppCfg, refresh: list[str] | None = None) -> dict:
+    """用当前所有「启用」的订阅源重新拉取并合并节点，写回 sb_nodes。
+
+    ``refresh`` 只重新拉这几个源（见 subs.sync_subscriptions），其余源沿用已有节点。
+    """
     import time as _t
-    res = subs.sync_subscriptions(cfg.outlet.subscriptions, previous=cfg.outlet.sb_nodes)
+    res = subs.sync_subscriptions(cfg.outlet.subscriptions, previous=cfg.outlet.sb_nodes,
+                                  refresh=refresh)
     removed = set(cfg.outlet.sb_removed or [])
     nodes = [n for n in res["nodes"] if n["name"] not in removed]
     if len(nodes) != len(res["nodes"]):
@@ -598,13 +602,17 @@ def _resync(cfg: st.AppCfg) -> dict:
     now = _t.strftime("%Y-%m-%d %H:%M", _t.localtime())
     for s in res["summary"]:
         sub = by_url.get(s.get("url"))
-        if sub is not None:
-            sub["count"] = s.get("count", 0)
-            if s.get("ok"):
-                sub["updated_at"] = now
-                # 用量/到期只有机场给了才更新；这次没给就留着上次的，别把显示抹掉
-                if s.get("usage"):
-                    sub["usage"] = s["usage"]
+        if sub is None:
+            continue
+        sub["count"] = s.get("count", 0)
+        if s.get("ok"):
+            sub["updated_at"] = now
+            # 用量只认这一次更新拿到的东西：机场给了就记，没给就不显示
+            # （旧值可能是上一家机场 / 上一次的数据，留着会误导人）
+            if s.get("usage"):
+                sub["usage"] = s["usage"]
+            else:
+                sub.pop("usage", None)
     # 清掉已不存在于新节点集的默认节点引用
     names = {n["name"] for n in res["nodes"]}
     if cfg.outlet.sb_node and cfg.outlet.sb_node not in names:
@@ -616,8 +624,15 @@ def _resync(cfg: st.AppCfg) -> dict:
     # 汇总日志
     ok_names = [s.get("name") for s in res["summary"] if s.get("ok")]
     fail_names = [s.get("name") for s in res["summary"] if s.get("ok") is False]
+    if refresh is None:
+        head = "同步订阅"
+    else:
+        # 只更新了某几条：日志里点明是哪一条，别让人以为是全量刷新
+        touched = [s.get("name") or s.get("url") for s in res["summary"]
+                   if s.get("ok") is not None]
+        head = f"更新订阅「{'、'.join(t for t in touched if t)}」"
     uplog.append("info" if res["ok"] else "warn", "subs",
-                 f"同步订阅：合并 {len(res['nodes'])} 个节点"
+                 f"{head}：合并 {len(res['nodes'])} 个节点"
                  + (f"（{len(ok_names)} 个源成功）" if ok_names else "")
                  + (f"；失败：{','.join(fail_names)}" if fail_names else ""))
     return res
@@ -723,11 +738,28 @@ def api_subs_update(req: SubUpdateReq):
                     "nodes": [_node_view(n) for n in cfg.outlet.sb_nodes],
                     "unsupported": []}
         st.save(cfg)
-    res = _resync(cfg)
-    return {"ok": res["ok"], "message": res["message"], "summary": res["summary"],
-            "subscriptions": cfg.outlet.subscriptions,
-            "nodes": [_node_view(n) for n in cfg.outlet.sb_nodes],
-            "unsupported": res["unsupported"]}
+    # 只更新这一条订阅时，其它订阅沿用已有节点、不联网：
+    # 否则点一次更新要等所有订阅各下一遍（经常十几秒，看着像没反应）
+    refresh = None
+    if req.id:
+        # 有 id 就用 id（同一个地址挂两遍也只更新点的那条）；早期订阅没 id 才退回地址/备注名
+        refresh = [target.get("id") or target.get("url") or target.get("name") or ""]
+    res = _resync(cfg, refresh=refresh)
+    out = {"message": res["message"], "summary": res["summary"],
+           "subscriptions": cfg.outlet.subscriptions,
+           "nodes": [_node_view(n) for n in cfg.outlet.sb_nodes],
+           "unsupported": res["unsupported"]}
+    if refresh is None:
+        out["ok"] = res["ok"]
+    else:
+        # 单条更新：请求本身成功，这条订阅的成败单独告诉前端，好给出准确的提示
+        mine = next((s for s in res["summary"]
+                     if (s.get("url") or "") == (target.get("url") or "")
+                     and s.get("ok") is not None), {})
+        out["ok"] = True
+        out["sub_ok"] = bool(mine.get("ok"))
+        out["sub_message"] = mine.get("message", "")
+    return out
 
 
 @app.post("/api/subs/del", dependencies=[Depends(guard)])

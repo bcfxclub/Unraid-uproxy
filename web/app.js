@@ -5,12 +5,14 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
 let STATE = null;
 let toastTimer = null;
 
-function toast(msg) {
+function toast(msg, ms) {
   const el = $("#toast");
   el.textContent = msg;
   el.classList.add("on");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove("on"), 3000);
+  // ms = 0 表示常驻（用来挂「正在更新…」，出结果时被下一条提示替换）
+  const hold = ms === undefined ? 3000 : ms;
+  if (hold > 0) toastTimer = setTimeout(() => el.classList.remove("on"), hold);
 }
 
 /* ---------------- 会话令牌（登录后获得，对用户透明） ----------------
@@ -581,15 +583,83 @@ async function delSubs(keys, label) {
   await loadState();
 }
 
+/* 订阅更新中（同一时间只跑一轮，避免连点把节点列表刷乱） */
+let subBusy = false;
+
+function cardSel(id) {
+  return `[data-key="${String(id).replace(/"/g, '\\"')}"]`;
+}
+
+/* 更新完的一句话结论：哪条订阅、成没成、拿到多少节点、用量多少 */
+function subResultLine(sub, d) {
+  const name = subTitle(sub);
+  const s = (d.summary || []).find((x) => (x.url || "") === (sub.url || "")) || {};
+  if (d.sub_ok === false || s.ok === false) {
+    return `${name} 更新失败：${d.sub_message || s.message || "拉取失败"}`;
+  }
+  const bits = [`${name} 已更新`];
+  if (sub.count) bits.push(`${sub.count} 个节点`);
+  if (hasUsage(sub)) bits.push(`已用 ${bytes2(sub.usage.used)} / ${bytes2(sub.usage.total)}`);
+  return bits.join(" · ");
+}
+
 async function updateSubs(ids) {
   if (!ids.length) { toast("请先选择订阅"); return; }
-  let last = "";
-  for (const id of ids) {
-    const d = await api("/api/subs/update", "POST", { id });
-    last = d.message || last;
+  if (subBusy) { toast("正在更新，等这一轮跑完"); return; }
+  const all = STATE?.config?.outlet?.subscriptions || [];
+  const targets = ids.map((id) => all.find((s) => subKey(s) === id || s.id === id) || { id });
+  // 订阅页卡片和首页订阅行都要点亮：首页那一份虽然藏在别的页签里，
+  // 但 querySelector 会先命中它，所以这里两处都取，别只标到看不见的那个
+  const cards = ids.flatMap((id) => Array.from(
+    document.querySelectorAll(`.subcard${cardSel(id)}, .dsub${cardSel(id)}`)));
+
+  subBusy = true;
+  try {
+    cards.forEach((c) => {
+      c.classList.add("busy");
+      const b = c.querySelector(".dots");
+      if (b && b.parentNode) {
+        // 卡片上挂一枚「更新中」，比只弹一下提示更耐看
+        if (!c.querySelector(".busy-tag")) {
+          b.parentNode.insertBefore(el("span", "busy-tag", "更新中"), b);
+        }
+        b.disabled = true;
+      }
+    });
+    // 进度提示常驻，直到出结果（默认 3 秒会被清掉，慢的订阅又变成「没反应」）
+    toast(ids.length === 1 ? `正在更新「${subTitle(targets[0])}」…` : `正在更新 ${ids.length} 个订阅…`, 0);
+
+    const results = [];
+    for (const id of ids) {
+      results.push(await api("/api/subs/update", "POST", { id }));
+    }
+    await loadState();
+    // 用刷新后的数据说话（节点数、用量都是这次更新后的）
+    const fresh = STATE?.config?.outlet?.subscriptions || [];
+    const lines = ids.map((id, i) => {
+      const sub = fresh.find((s) => subKey(s) === id) || targets[i];
+      return subResultLine(sub, results[i]);
+    });
+    const fails = lines.filter((l) => l.includes("失败"));
+    if (!fails.length) {
+      toast(lines.length === 1 ? lines[0] : `已更新 ${lines.length} 个订阅`);
+    } else if (fails.length === lines.length) {
+      toast(lines.join("；"), 6000);
+    } else {
+      toast(`更新 ${lines.length - fails.length} 个成功；${fails.join("；")}`, 6000);
+    }
+  } catch (e) {
+    toast(`更新失败：${e.message}`, 5000);
+    await loadState();
+  } finally {
+    subBusy = false;
+    cards.forEach((c) => {
+      c.classList.remove("busy");
+      c.querySelectorAll(".busy-tag").forEach((n) => n.remove());
+      const b = c.querySelector(".dots");
+      if (b) b.disabled = false;
+    });
   }
-  toast(ids.length === 1 ? last || "已更新" : `已更新 ${ids.length} 个订阅`);
-  await loadState();
 }
 
 async function toggleSub(s) {
@@ -618,7 +688,8 @@ async function editSub(s) {
   if (v.name) body.name = v.name;
   if (v.url && v.url !== s.url) body.url = v.url;
   const d = await api("/api/subs/update", "POST", body);
-  toast(d.message || "已保存");
+  // 改了地址会顺手重拉这一条：拉不到也要说清楚，别只回「已保存」
+  toast(d.sub_ok === false ? `已保存，但拉取失败：${d.sub_message || "未知原因"}` : "已保存");
   await loadState();
 }
 
@@ -700,6 +771,7 @@ function renderSubList(subs) {
   subs.forEach((s) => {
     const key = subKey(s);
     const card = el("div", "subcard");
+    card.dataset.key = key;   // 更新时按这个找到卡片，给「更新中」的状态
     if (s.enabled === false) card.classList.add("off");
 
     const head = el("div", "sc-head");
@@ -1749,12 +1821,29 @@ $("#btnSubAdd").addEventListener("click", () => safe(async () => {
 }, "添加订阅"));
 
 $("#btnSubUpdateAll").addEventListener("click", () => safe(async () => {
+  if (subBusy) { toast("正在更新，等这一轮跑完"); return; }
   const out = $("#subOut"); clear(out); out.appendChild(el("div", "hint", "正在更新全部订阅…"));
-  const d = await api("/api/subs/update", "POST", {});
-  clear(out);
-  out.appendChild(pill(d.ok ? "完成" : "失败", d.ok ? "ok" : "bad"));
-  out.appendChild(el("div", "", d.message));
-  loadState();
+  const cards = Array.from(document.querySelectorAll(".subcard"));
+  subBusy = true;
+  cards.forEach((c) => c.classList.add("busy"));
+  toast("正在更新全部订阅…", 0);
+  try {
+    const d = await api("/api/subs/update", "POST", {});
+    clear(out);
+    out.appendChild(pill(d.ok ? "完成" : "失败", d.ok ? "ok" : "bad"));
+    out.appendChild(el("div", "", d.message));
+    // 逐条列出结果：哪条成功、哪条挂在哪，比一句合并摘要有用
+    (d.summary || []).forEach((s) => {
+      const extra = s.ok && s.usage && s.usage.total
+        ? `（已用 ${bytes2(s.usage.used)} / ${bytes2(s.usage.total)}）` : "";
+      out.appendChild(el("div", "mono", `${s.ok ? "✓" : "✕"} ${s.name || s.url}：${s.message}${extra}`));
+    });
+    toast(d.ok ? "已更新全部订阅" : "部分订阅更新失败", d.ok ? 3000 : 6000);
+    await loadState();
+  } finally {
+    subBusy = false;
+    cards.forEach((c) => c.classList.remove("busy"));
+  }
 }, "更新全部订阅"));
 
 $("#btnSubRaw").addEventListener("click", () => safe(async () => {
@@ -2826,6 +2915,7 @@ const Dash = (function () {
     }
     subs.slice(0, 4).forEach((s) => {
       const d = el("div", "dsub");
+      d.dataset.key = subKey(s);
       const main = el("div", "dsub-main");
       main.appendChild(el("div", "dsub-name", s.name || s.url || "未命名订阅"));
 

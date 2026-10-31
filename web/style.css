@@ -476,6 +476,16 @@ table.data th { color: var(--muted); font-weight: 400; }
   background: var(--card-2); border: 1px solid var(--line); transition: border-color .15s; }
 .subcard:hover { border-color: var(--muted); }
 .subcard.off { opacity: .5; }
+/* 正在更新：描边亮起 + 卡片头里挂一枚脉动的「更新中」 */
+.subcard.busy, .dsub.busy { border-color: var(--accent); }
+.subcard.busy .dots, .dsub.busy .dots { opacity: .35; }
+.busy-tag {
+  flex: 0 0 auto; font-size: 10px; line-height: 1; padding: 3px 7px;
+  border-radius: 999px; color: var(--accent);
+  border: 1px solid currentColor; background: rgba(255, 255, 255, .04);
+  animation: sub-pulse 1.1s ease-in-out infinite;
+}
+@keyframes sub-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 .sc-head { display: flex; align-items: center; gap: 8px; }
 .sc-head input[type=checkbox] { flex: 0 0 auto; }
 .sc-name { flex: 1; min-width: 0; font-weight: 600; font-size: 13.5px; color: var(--text);
