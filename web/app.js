@@ -37,13 +37,34 @@ function setSession(v) {
   try { localStorage.setItem(SESSION_KEY, SESSION); } catch (e) { /* ignore */ }
 }
 
-function _opt(method, body) {
+function _opt(method, body, signal) {
   const headers = {};
   if (SESSION) headers["X-UPX-Token"] = SESSION;
   if (body !== undefined) headers["Content-Type"] = "application/json";
   const opt = { method, headers };
   if (body !== undefined) opt.body = JSON.stringify(body);
+  if (signal) opt.signal = signal;
   return opt;
+}
+
+/* 统一发请求：带超时，并把网络层错误（服务器没起 / 断网 / 跨域被拦）翻译成人话，
+   而不是把浏览器原生的 "Failed to fetch" 直接甩给用户。 */
+async function rawFetch(path, method, body) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 180000); // 实测可能要起容器，给足时间
+  try {
+    return await fetch(path, _opt(method, body, ctrl.signal));
+  } catch (e) {
+    if (e && e.name === "AbortError") {
+      throw new Error("请求超时：服务器长时间无响应，请稍后重试");
+    }
+    // 网络层失败：fetch 抛的是 TypeError，原文往往是 "Failed to fetch"
+    const loc = (location.port && location.port !== "80" && location.port !== "443")
+      ? `（默认端口 ${location.port}）` : "";
+    throw new Error(`无法连接服务器，请确认 uProxy 服务正在运行${loc}`);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /* ---------------- 登录 / 登出 ---------------- */
@@ -61,7 +82,7 @@ async function doLogin() {
   const u = $("#inUser").value.trim();
   const p = $("#inPass").value;
   try {
-    const r = await fetch("/api/login", _opt("POST", { username: u, password: p }));
+    const r = await rawFetch("/api/login", "POST", { username: u, password: p });
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
       $("#loginErr").textContent = j.detail || "登录失败";
@@ -93,7 +114,7 @@ $("#inUser").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#inP
 $("#btnLogout").addEventListener("click", () => safe(doLogout, "退出"));
 
 async function api(path, method = "GET", body) {
-  let r = await fetch(path, _opt(method, body));
+  let r = await rawFetch(path, method, body);
   if (r.status === 401) {
     // 会话失效 / 未登录 -> 回到登录页
     setSession("");
@@ -111,7 +132,7 @@ async function api(path, method = "GET", body) {
 /* 与 api 类似，但 ok:false 不算错误：预检/状态这类「信息性」结果即使 ok 为否也要照常渲染。
    只在 401（会话失效）或网络层失败时抛错，交给 safe 提示。 */
 async function apiRaw(path, method = "GET", body) {
-  let r = await fetch(path, _opt(method, body));
+  let r = await rawFetch(path, method, body);
   if (r.status === 401) {
     setSession("");
     showLogin("会话已失效，请重新登录");
