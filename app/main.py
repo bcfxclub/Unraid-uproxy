@@ -32,6 +32,9 @@ app = FastAPI(title="uproxy", version="1.0.0")
 
 @app.on_event("startup")
 async def _startup() -> None:
+    if auth.SOURCE == "default":
+        uplog.append("warn", "auth",
+                     "正在使用初始密码 admin，任何人都能登录；请到「账号」页立即修改")
     asyncio.create_task(_auto_update_loop())
 
 
@@ -95,12 +98,15 @@ class SubUpdateReq(BaseModel):
 
 class SubDelReq(BaseModel):
     id: str = ""
+    ids: list[str] = Field(default_factory=list)   # 批量删除
 
 
 class NodeReq(BaseModel):
     disabled: list[str] = Field(default_factory=list)
     node: str = ""
     rename: dict = Field(default_factory=dict)   # {from: old_name, to: new_name}
+    delete: list[str] = Field(default_factory=list)    # 批量删除节点（进黑名单）
+    restore: list[str] = Field(default_factory=list)   # 从黑名单恢复
 
 
 @app.exception_handler(Exception)
@@ -400,7 +406,13 @@ def _resync(cfg: st.AppCfg) -> dict:
     """用当前所有「启用」的订阅源重新拉取并合并节点，写回 sb_nodes。"""
     import time as _t
     res = subs.sync_subscriptions(cfg.outlet.subscriptions)
-    cfg.outlet.sb_nodes = res["nodes"]
+    # 用户显式删除过的节点不再回来（黑名单）
+    removed = set(cfg.outlet.sb_removed or [])
+    nodes = [n for n in res["nodes"] if n["name"] not in removed]
+    if len(nodes) != len(res["nodes"]):
+        res = {**res, "nodes": nodes,
+               "message": f"{res['message']}（已排除 {len(res['nodes']) - len(nodes)} 个手动删除的节点）"}
+    cfg.outlet.sb_nodes = nodes
     # 回填每个源的 count / updated_at / 最近结果
     by_url = {s.get("url"): s for s in cfg.outlet.subscriptions}
     now = _t.strftime("%Y-%m-%d %H:%M", _t.localtime())
@@ -451,9 +463,13 @@ def api_subs_add(req: SubAddReq):
             "enabled": req.enabled,
             "updated_at": _t.strftime("%Y-%m-%d %H:%M", _t.localtime()),
             "count": len(parsed["nodes"]),
+            # 本地粘贴的节点存进订阅里，后续重新同步不会丢
+            "nodes": parsed["nodes"],
         }
         cfg.outlet.subscriptions.append(sub)
-        # 仅把本批节点并入（不清空其它源）
+        # 仅把本批节点并入（不清空其它源），并打上来源标记，方便按订阅删除/分组
+        for n in parsed["nodes"]:
+            n["source"] = sub["name"]
         cfg.outlet.sb_nodes = subs._dedupe(cfg.outlet.sb_nodes + parsed["nodes"])
         st.save(cfg)
         return {"ok": True, "message": parsed["message"], "summary": [{"name": sub["name"], "ok": True, "count": len(parsed["nodes"])}],
@@ -486,7 +502,8 @@ def api_subs_update(req: SubUpdateReq):
     if req.id:
         target = None
         for s in cfg.outlet.subscriptions:
-            if s.get("id") == req.id:
+            # 兼容早期没有 id 的订阅：也接受用地址或备注名定位
+            if s.get("id") == req.id or s.get("url") == req.id or s.get("name") == req.id:
                 target = s
                 break
         if target is None:
@@ -498,10 +515,27 @@ def api_subs_update(req: SubUpdateReq):
             target["url"] = req.url
         if req.ua:
             target["ua"] = req.ua
-        if req.proxy is not None:
+        if req.proxy:
             target["proxy"] = req.proxy
         if req.enabled is not None:
             target["enabled"] = req.enabled
+        # 单纯「停用」一个订阅：本地剔除它带来的节点即可，不必联网重拉其它订阅
+        if req.enabled is False and not req.url and not req.name:
+            src = target.get("name") or ""
+            before = len(cfg.outlet.sb_nodes)
+            cfg.outlet.sb_nodes = [n for n in cfg.outlet.sb_nodes
+                                   if (n.get("source") or "") != src]
+            names = {n["name"] for n in cfg.outlet.sb_nodes}
+            if cfg.outlet.sb_node and cfg.outlet.sb_node not in names:
+                cfg.outlet.sb_node = ""
+            cfg.outlet.sb_disabled = [d for d in cfg.outlet.sb_disabled if d in names]
+            st.save(cfg)
+            gone = before - len(cfg.outlet.sb_nodes)
+            uplog.append("info", "subs", f"停用订阅「{src}」，移除 {gone} 个节点")
+            return {"ok": True, "message": f"已停用「{src}」，移除 {gone} 个节点",
+                    "subscriptions": cfg.outlet.subscriptions,
+                    "nodes": [_node_view(n) for n in cfg.outlet.sb_nodes],
+                    "unsupported": []}
         st.save(cfg)
     res = _resync(cfg)
     return {"ok": res["ok"], "message": res["message"], "summary": res["summary"],
@@ -513,12 +547,34 @@ def api_subs_update(req: SubUpdateReq):
 @app.post("/api/subs/del", dependencies=[Depends(guard)])
 def api_subs_del(req: SubDelReq):
     cfg = st.load()
-    before = len(cfg.outlet.subscriptions)
-    cfg.outlet.subscriptions = [s for s in cfg.outlet.subscriptions if s.get("id") != req.id]
-    if len(cfg.outlet.subscriptions) == before:
+    drop = {i for i in ([req.id] if req.id else []) + list(req.ids) if i}
+    if not drop:
+        raise HTTPException(status_code=400, detail="请指定要删除的订阅")
+    # 兼容早期没有 id 的订阅：按名称/地址兜底匹配
+    keep, gone = [], []
+    for s in cfg.outlet.subscriptions:
+        key = s.get("id") or s.get("url") or s.get("name") or ""
+        (gone if key in drop else keep).append(s)
+    if not gone:
         raise HTTPException(status_code=404, detail="订阅不存在")
-    res = _resync(cfg)
-    return {"ok": True, "message": res["message"],
+    cfg.outlet.subscriptions = keep
+
+    # 删除必须是「即时」的：直接把该订阅带来的节点本地剔除，
+    # 不重新联网拉取（否则别的订阅一超时，删除就跟着卡住）。
+    gone_src = {(s.get("name") or s.get("url") or "") for s in gone}
+    before = len(cfg.outlet.sb_nodes)
+    cfg.outlet.sb_nodes = [n for n in cfg.outlet.sb_nodes
+                           if (n.get("source") or "") not in gone_src]
+    removed = before - len(cfg.outlet.sb_nodes)
+    names = {n["name"] for n in cfg.outlet.sb_nodes}
+    if cfg.outlet.sb_node and cfg.outlet.sb_node not in names:
+        cfg.outlet.sb_node = ""
+    cfg.outlet.sb_disabled = [d for d in cfg.outlet.sb_disabled if d in names]
+    st.save(cfg)
+    uplog.append("info", "subs",
+                 f"删除 {len(gone)} 个订阅，同步移除 {removed} 个节点（剩余 {len(keep)} 个订阅）")
+    return {"ok": True, "deleted": len(gone), "removed_nodes": removed,
+            "message": f"已删除 {len(gone)} 个订阅、{removed} 个节点",
             "subscriptions": cfg.outlet.subscriptions,
             "nodes": [_node_view(n) for n in cfg.outlet.sb_nodes]}
 
@@ -541,6 +597,28 @@ def api_nodes(req: NodeReq):
             if cfg.outlet.sb_node == frm:
                 cfg.outlet.sb_node = to
             cfg.outlet.sb_disabled = [to if d == frm else d for d in cfg.outlet.sb_disabled]
+            cfg.outlet.sb_removed = [to if d == frm else d for d in cfg.outlet.sb_removed]
+    if req.delete:
+        drop = {d for d in req.delete if d}
+        cfg.outlet.sb_nodes = [n for n in cfg.outlet.sb_nodes if n["name"] not in drop]
+        # 记进黑名单，订阅再次同步时不会复活
+        cfg.outlet.sb_removed = list(dict.fromkeys(list(cfg.outlet.sb_removed) + sorted(drop)))
+        cfg.outlet.sb_disabled = [d for d in cfg.outlet.sb_disabled if d not in drop]
+        if cfg.outlet.sb_node in drop:
+            cfg.outlet.sb_node = ""
+        uplog.append("info", "subs", f"删除 {len(drop)} 个节点（{','.join(sorted(drop)[:3])}"
+                     + ("…）" if len(drop) > 3 else "）"))
+    if req.restore:
+        back = {d for d in req.restore if d}
+        cfg.outlet.sb_removed = [d for d in cfg.outlet.sb_removed if d not in back]
+        st.save(cfg)
+        res = _resync(cfg)
+        uplog.append("info", "subs", f"恢复 {len(back)} 个节点")
+        return {"ok": True, "message": res["message"], "nodes": [
+            {**_node_view(n), "disabled": n["name"] in cfg.outlet.sb_disabled}
+            for n in cfg.outlet.sb_nodes
+        ], "sb_node": cfg.outlet.sb_node, "sb_disabled": cfg.outlet.sb_disabled,
+            "sb_removed": cfg.outlet.sb_removed}
     if req.disabled is not None:
         cfg.outlet.sb_disabled = [d for d in req.disabled if d]
     if req.node:
@@ -549,7 +627,34 @@ def api_nodes(req: NodeReq):
     return {"ok": True, "nodes": [
         {**_node_view(n), "disabled": n["name"] in cfg.outlet.sb_disabled}
         for n in cfg.outlet.sb_nodes
-    ], "sb_node": cfg.outlet.sb_node, "sb_disabled": cfg.outlet.sb_disabled}
+    ], "sb_node": cfg.outlet.sb_node, "sb_disabled": cfg.outlet.sb_disabled,
+        "sb_removed": cfg.outlet.sb_removed}
+
+
+class ShareReq(BaseModel):
+    names: list[str] = Field(default_factory=list)
+
+
+@app.post("/api/nodes/share", dependencies=[Depends(guard)])
+def api_nodes_share(req: ShareReq):
+    """把选中节点导出成分享链接（一行一个）。"""
+    cfg = st.load()
+    want = {n for n in req.names if n}
+    if not want:
+        raise HTTPException(status_code=400, detail="请选择节点")
+    found = [n for n in cfg.outlet.sb_nodes if n["name"] in want]
+    if not found:
+        raise HTTPException(status_code=404, detail="节点不存在（可能已被删除）")
+    items, un = [], []
+    for n in found:
+        uri = subs.to_uri(n)
+        if uri:
+            items.append({"name": n["name"], "uri": uri})
+        else:
+            un.append(n["name"])
+    text = "\n".join(i["uri"] for i in items)
+    return {"ok": True, "items": items, "text": text, "unsupported": un,
+            "message": f"导出 {len(items)} 条链接" + (f"；{len(un)} 个协议暂不支持" if un else "")}
 
 
 # --------------------------------------------------------------------------

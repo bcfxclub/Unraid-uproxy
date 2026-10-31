@@ -2,7 +2,8 @@
 
 设计要点（面向家庭局域网部署，够用且不臃肿）：
 - 凭据来源优先级：``STATE_DIR/auth.json``（界面里改过的密码）> 环境变量
-  ``UPX_PASSWORD`` / 老部署的 ``UPX_TOKEN``。两者都没有则**不鉴权**（开放访问）。
+  ``UPX_PASSWORD`` / 老部署的 ``UPX_TOKEN`` > **默认密码** ``admin``（用户名 ``admin``）。
+  默认密码只是兜底，避免装好就裸奔；首次登录后请到「账号」页改掉。
 - 默认用户名 ``admin``，可用 ``UPX_USER`` 覆盖。
 - 密码只存 PBKDF2-SHA256 哈希 + 随机盐，不存明文；auth.json 权限 0600。
 - 登录后签发随机会话令牌，存内存字典并带过期时间（默认 7 天），前端只持有这个令牌，
@@ -30,8 +31,12 @@ MAX_LEN = 200
 
 ENV_USER = (os.environ.get("UPX_USER") or "admin").strip() or "admin"
 
-# 密码优先级：UPX_PASSWORD > UPX_TOKEN（老部署）。都为空 -> 开放访问。
+# 密码优先级：UPX_PASSWORD > UPX_TOKEN（老部署）。都为空 -> 用默认密码（见下）。
 ENV_PASSWORD = (os.environ.get("UPX_PASSWORD") or os.environ.get("UPX_TOKEN") or "").strip()
+
+# 初始默认密码：既没设环境变量、也没在界面改过时使用，强制登录避免局域网裸奔。
+DEFAULT_USER = "admin"
+DEFAULT_PASSWORD = "admin"
 
 # 老的「直连口令」：仅当显式设置了 UPX_TOKEN 才接受旧的 ?token= 方式。
 LEGACY_TOKEN = os.environ.get("UPX_TOKEN", "").strip()
@@ -46,8 +51,8 @@ SESSIONS: dict[str, float] = {}
 # 运行时生效的凭据状态（由 _refresh() 维护，改密码后即时切换）
 # ---------------------------------------------------------------------------
 USER = ENV_USER                      # 当前生效用户名
-REQUIRED = bool(ENV_PASSWORD)        # 是否要求登录
-SOURCE = "env" if ENV_PASSWORD else "open"   # file / env / open
+REQUIRED = True                      # 是否要求登录（默认密码也要求登录）
+SOURCE = "env" if ENV_PASSWORD else "default"   # file / env / default
 _CRED: dict | None = None            # auth.json 内容（存在时优先生效）
 
 
@@ -82,9 +87,10 @@ def _refresh() -> None:
         REQUIRED = True
         SOURCE = "env"
     else:
-        USER = ENV_USER
-        REQUIRED = False
-        SOURCE = "open"
+        # 什么都没配：用默认密码 admin/admin，仍然要求登录
+        USER = DEFAULT_USER
+        REQUIRED = True
+        SOURCE = "default"
 
 
 _refresh()
@@ -101,6 +107,8 @@ def verify(password: str) -> bool:
         except Exception:
             return False
         return hmac.compare_digest(_hash(password, salt, iters), _CRED["hash"])
+    if SOURCE == "default":
+        return hmac.compare_digest(password, DEFAULT_PASSWORD)
     return hmac.compare_digest(password, ENV_PASSWORD)
 
 

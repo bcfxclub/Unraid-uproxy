@@ -344,7 +344,7 @@ table.data th { color: var(--muted); font-weight: 400; }
 .node-card.off { opacity: 0.45; }
 .nc-head { display: flex; align-items: center; gap: 8px; }
 .nc-head input[type=checkbox] { flex: 0 0 auto; width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
-.nc-name { font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nc-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nc-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .nc-type, .nc-src { font-size: 11px; padding: 1px 7px; border-radius: 6px; background: var(--card-2); color: var(--muted); }
 .nc-src { color: var(--accent); background: rgba(230,182,79,0.10); }
@@ -426,3 +426,63 @@ table.data th { color: var(--muted); font-weight: 400; }
 .acct-hint b { color: var(--text); font-weight: 600; }
 .acct-hint code { font-family: var(--mono); font-size: 11.5px; color: var(--text);
   background: rgba(127, 127, 127, .14); padding: 1px 5px; border-radius: 4px; }
+
+/* ---------------- 列表工具条（批量操作） ---------------- */
+.listbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 10px 0 12px; padding: 8px 10px; border-radius: 10px;
+  background: var(--card-2); border: 1px solid var(--line); }
+.listbar .grow { flex: 1; }
+.listbar .muted { font-size: 12px; }
+.listbar button.mini { padding: 4px 10px; font-size: 12px; }
+.listbar button.mini.bad { color: var(--bad); border-color: rgba(224,106,90,.35); }
+.listbar button:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ---------------- 订阅卡片 ---------------- */
+.subgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.subcard { position: relative; padding: 14px 14px 12px; border-radius: 12px;
+  background: var(--card-2); border: 1px solid var(--line); transition: border-color .15s; }
+.subcard:hover { border-color: var(--muted); }
+.subcard.off { opacity: .5; }
+.sc-head { display: flex; align-items: center; gap: 8px; }
+.sc-head input[type=checkbox] { flex: 0 0 auto; }
+.sc-name { flex: 1; min-width: 0; font-weight: 600; font-size: 13.5px; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sc-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; align-items: center; }
+.sc-badge { font-size: 11px; padding: 2px 8px; border-radius: 6px; color: var(--muted);
+  background: rgba(127,127,127,.12); }
+.sc-url { margin-top: 8px; font-size: 11px; color: var(--muted); font-family: var(--mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------------- ⋮ 三点菜单 ---------------- */
+.dots { flex: 0 0 auto; width: 26px; height: 24px; padding: 0; line-height: 1;
+  border-radius: 6px; background: transparent; border: 1px solid transparent;
+  color: var(--muted); font-size: 15px; }
+.dots:hover { color: var(--text); background: var(--card); border-color: var(--line); }
+.pop { position: fixed; z-index: 90; min-width: 148px; padding: 6px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(0,0,0,.45); display: flex; flex-direction: column; }
+.pop button { text-align: left; padding: 8px 10px; border-radius: 7px; border: none;
+  background: transparent; color: var(--text); font-size: 13px; cursor: pointer; }
+.pop button:hover { background: var(--card-2); }
+.pop button.danger { color: var(--bad); }
+.pop button.danger:hover { background: var(--bad-soft); }
+.pop-sep { height: 1px; margin: 5px 4px; background: var(--line); }
+
+/* ---------------- 通用弹窗 ---------------- */
+.modal-mask { position: fixed; inset: 0; z-index: 120; background: rgba(0,0,0,.55);
+  display: flex; align-items: center; justify-content: center; padding: 20px; }
+.modal { width: 100%; max-width: 420px; padding: 18px 18px 14px; border-radius: 14px;
+  background: var(--card); border: 1px solid var(--line); box-shadow: 0 20px 50px rgba(0,0,0,.5); }
+.modal h3 { margin: 0 0 10px; font-size: 15px; color: var(--text); font-weight: 600; }
+.modal-note { margin: 0 0 10px; font-size: 12px; color: var(--muted); line-height: 1.6; }
+.modal-lbl { display: block; font-size: 11.5px; color: var(--muted); margin: 8px 0 4px; }
+.modal-input, .modal-area { width: 100%; padding: 8px 10px; border-radius: 8px;
+  background: var(--bg); border: 1px solid var(--line); color: var(--text);
+  font-size: 13px; font-family: inherit; }
+.modal-area { font-family: var(--mono); font-size: 12px; resize: vertical; }
+.modal-input:focus, .modal-area:focus { outline: none; border-color: var(--accent); }
+.modal-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
+/* 选中态 */
+.node-card.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.tr-off, tr.off { opacity: .5; }

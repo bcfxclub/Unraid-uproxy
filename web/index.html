@@ -155,7 +155,15 @@
   <section id="tab-subs">
     <div class="card">
       <h2>订阅源管理 <span class="tag">支持多个订阅并存、自动更新</span></h2>
-      <div id="subList" class="out"></div>
+      <div class="listbar">
+        <label class="chk"><input type="checkbox" id="subSelAll"> 全选</label>
+        <span id="subSelCount" class="muted">已选 0 项</span>
+        <button id="btnSubDelSel" class="mini bad" disabled>删除所选</button>
+        <button id="btnSubUpdSel" class="mini" disabled>更新所选</button>
+        <span class="grow"></span>
+        <button id="btnSubUpdateAll" class="mini">更新全部</button>
+      </div>
+      <div id="subList" class="subgrid"></div>
       <div class="row wrap" style="margin-top:12px">
         <input id="inSubName" placeholder="备注名（可选）" style="max-width:160px">
         <input id="inSubUrl" placeholder="订阅地址 https://... 或 base64...">
@@ -165,7 +173,6 @@
       <div class="row wrap">
         <label class="chk"><input type="checkbox" id="inSubEnabled" checked> 启用</label>
         <button id="btnSubAdd" class="primary">添加并拉取</button>
-        <button id="btnSubUpdateAll">更新全部</button>
       </div>
       <label class="lbl">或直接粘贴订阅内容 / Clash YAML（本地解析，不经网络）</label>
       <div class="row">
@@ -177,24 +184,29 @@
 
     <div class="card">
       <h2>节点管理 <span class="tag">按订阅来源分组 · 勾选启用 / 选默认出口 / 测速</span></h2>
-      <div class="row wrap" style="justify-content:space-between">
-        <div class="row wrap">
-          <input id="nodeSearch" placeholder="搜索节点…" style="max-width:180px">
-          <label class="lbl" style="margin:0">来源</label>
-          <select id="nodeSource"><option value="">全部</option></select>
-          <span id="nodeSelCount" class="muted" style="font-size:12px"></span>
-        </div>
-        <div class="row">
-          <button id="btnNodeTest">测试延迟</button>
-          <button id="btnNodeGrid" class="primary" title="网格视图">▦</button>
-          <button id="btnNodeList" title="列表视图">☰</button>
-        </div>
+      <div class="row wrap">
+        <input id="nodeSearch" placeholder="搜索节点…" style="max-width:180px">
+        <label class="lbl" style="margin:0">来源</label>
+        <select id="nodeSource"><option value="">全部</option></select>
+      </div>
+      <div class="listbar">
+        <label class="chk"><input type="checkbox" id="nodeSelAll"> 全选</label>
+        <span id="nodeSelCount" class="muted"></span>
+        <button id="btnNodeDelSel" class="mini bad" disabled>删除所选</button>
+        <button id="btnNodeShareSel" class="mini" disabled>分享所选</button>
+        <button id="btnNodeEnableSel" class="mini" disabled>启用</button>
+        <button id="btnNodeDisableSel" class="mini" disabled>停用</button>
+        <button id="btnNodeRestore" class="mini" hidden>恢复已删除</button>
+        <span class="grow"></span>
+        <button id="btnNodeTest">测试延迟</button>
+        <button id="btnNodeGrid" class="primary" title="网格视图">▦</button>
+        <button id="btnNodeList" title="列表视图">☰</button>
       </div>
       <div id="nodeGrid" class="nodegrid"></div>
       <div class="tablewrap" id="nodeTableWrap">
         <table class="tbl" id="nodeTable">
           <thead>
-            <tr><th style="width:54px">启用</th><th>名称</th><th style="width:90px">来源</th><th style="width:80px">类型</th><th style="width:90px">测速</th><th style="width:64px">默认</th></tr>
+            <tr><th style="width:54px">选择</th><th>名称</th><th style="width:70px">状态</th><th style="width:90px">来源</th><th style="width:80px">类型</th><th style="width:90px">测速</th><th style="width:64px">默认</th></tr>
           </thead>
           <tbody id="nodeTbody"></tbody>
         </table>
@@ -347,7 +359,8 @@
       </div>
 
       <div class="acct-hint">
-        <p><b>密码优先级</b>：界面里设置的 <code>auth.json</code> &gt; 环境变量 <code>UPX_PASSWORD</code> &gt; 未设置则开放访问。</p>
+        <p><b>密码优先级</b>：界面里设置的 <code>auth.json</code> &gt; 环境变量 <code>UPX_PASSWORD</code> &gt; 都没设时用初始密码 <code>admin</code>。</p>
+        <p><b>首次登录</b>：用户名 <code>admin</code>、密码 <code>admin</code>，登录后请立刻到这里改掉。</p>
         <p><b>保存后</b>所有其它设备上的登录会话立即失效，需要重新登录；当前页面会自动续上，不用重登。</p>
         <p><b>忘记密码</b>：删掉状态目录下的 <code>auth.json</code> 再重启容器，即回退到环境变量里的密码（或开放访问）。</p>
       </div>

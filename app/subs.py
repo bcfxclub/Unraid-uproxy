@@ -497,6 +497,20 @@ def sync_subscriptions(subscriptions: list[dict], ua: str = "clash.meta") -> dic
             summary.append({"name": sub.get("name", ""), "url": "", "ok": False,
                             "message": "地址为空", "count": 0})
             continue
+        # 粘贴型订阅：内容存在 sub["nodes"] 里，不走网络，重新同步时必须保活
+        if url.startswith("local://"):
+            stored = [n for n in (sub.get("nodes") or [])
+                      if isinstance(n, dict) and n.get("outbound")]
+            source_name = sub.get("name") or "本地粘贴"
+            for n in stored:
+                n["source"] = source_name
+            merged += stored
+            if stored:
+                any_ok = True
+            summary.append({"name": sub.get("name", ""), "url": url, "ok": bool(stored),
+                            "message": f"本地粘贴 {len(stored)} 个节点" if stored else "本地内容为空",
+                            "count": len(stored)})
+            continue
         got = fetch(url, sub.get("ua") or ua, proxy=sub.get("proxy") or "", retries=3)
         if not got["ok"]:
             summary.append({"name": sub.get("name", ""), "url": url, "ok": False,
@@ -523,3 +537,98 @@ def sync_subscriptions(subscriptions: list[dict], ua: str = "clash.meta") -> dic
         "message": f"合并 {len(nodes)} 个节点（来自 {sum(1 for s in summary if s.get('ok'))} 个可用订阅）",
     }
 
+
+
+def to_uri(node: dict) -> str:
+    """把内部节点还原成可分享的 URI（vless/vmess/trojan/ss/hysteria2）。
+
+    不支持的协议返回空串，由调用方给出提示。
+    """
+    ob = node.get("outbound") or {}
+    kind = str(ob.get("type") or node.get("type") or "").lower()
+    server = ob.get("server") or node.get("server") or ""
+    port = ob.get("server_port") or node.get("port") or 0
+    label = urllib.parse.quote(str(node.get("name") or ob.get("tag") or f"{server}:{port}"), safe="")
+    tls = ob.get("tls") or {}
+    tr = ob.get("transport") or {}
+
+    if kind in ("vless", "trojan"):
+        q: dict[str, str] = {}
+        if tls.get("enabled"):
+            real = (tls.get("reality") or {})
+            q["security"] = "reality" if real.get("enabled") else "tls"
+            if tls.get("server_name"):
+                q["sni"] = str(tls["server_name"])
+            if tls.get("insecure"):
+                q["allowInsecure"] = "1"
+            fp = (tls.get("utls") or {}).get("fingerprint")
+            if fp:
+                q["fp"] = str(fp)
+            if tls.get("alpn"):
+                q["alpn"] = ",".join(tls["alpn"])
+            if real.get("enabled"):
+                q["pbk"] = str(real.get("public_key") or "")
+                q["sid"] = str(real.get("short_id") or "")
+        tt = tr.get("type")
+        if tt:
+            q["type"] = str(tt)
+            if tt in ("ws", "httpupgrade"):
+                q["path"] = str(tr.get("path") or "/")
+                host = (tr.get("headers") or {}).get("Host")
+                if host:
+                    q["host"] = str(host)
+            elif tt == "grpc":
+                q["serviceName"] = str(tr.get("service_name") or "")
+            elif tt == "http":
+                q["path"] = str(tr.get("path") or "/")
+                hosts = tr.get("host") or []
+                if hosts:
+                    q["host"] = str(hosts[0])
+        if kind == "vless":
+            q = {"encryption": str(ob.get("encryption") or "none"), **q}
+            if ob.get("flow"):
+                q["flow"] = str(ob["flow"])
+            cred = str(ob.get("uuid") or "")
+        else:
+            cred = urllib.parse.quote(str(ob.get("password") or ""), safe="")
+        qs = urllib.parse.urlencode(q, quote_via=urllib.parse.quote, safe="")
+        return f"{kind}://{cred}@{server}:{port}" + (f"?{qs}" if qs else "") + f"#{label}"
+
+    if kind == "vmess":
+        v = {
+            "v": "2",
+            "ps": str(node.get("name") or ""),
+            "add": server,
+            "port": str(port),
+            "id": str(ob.get("uuid") or ""),
+            "aid": str(ob.get("alter_id") or 0),
+            "scy": str(ob.get("security") or "auto"),
+            "net": str(tr.get("type") or "tcp"),
+            "type": "none",
+            "host": str(((tr.get("headers") or {}).get("Host")) or ""),
+            "path": str(tr.get("path") or ""),
+            "tls": "tls" if tls.get("enabled") else "",
+            "sni": str(tls.get("server_name") or ""),
+        }
+        blob = json.dumps(v, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        return "vmess://" + base64.b64encode(blob).decode("ascii")
+
+    if kind == "shadowsocks":
+        userinfo = f"{ob.get('method', '')}:{ob.get('password', '')}"
+        b = base64.urlsafe_b64encode(userinfo.encode("utf-8")).decode("ascii").rstrip("=")
+        return f"ss://{b}@{server}:{port}#{label}"
+
+    if kind == "hysteria2":
+        cred = urllib.parse.quote(str(ob.get("password") or ""), safe="")
+        q2: dict[str, str] = {}
+        if tls.get("server_name"):
+            q2["sni"] = str(tls["server_name"])
+        if tls.get("insecure"):
+            q2["insecure"] = "1"
+        if ob.get("obfs"):
+            q2["obfs"] = str((ob["obfs"] or {}).get("type") or "")
+            q2["obfs-password"] = str((ob["obfs"] or {}).get("password") or "")
+        qs2 = urllib.parse.urlencode(q2, quote_via=urllib.parse.quote, safe="")
+        return f"hysteria2://{cred}@{server}:{port}" + (f"?{qs2}" if qs2 else "") + f"#{label}"
+
+    return ""

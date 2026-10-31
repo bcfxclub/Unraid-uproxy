@@ -128,6 +128,152 @@ function pill(text, kind) {
 
 function clear(node) { node.textContent = ""; }
 
+/* ---------------- 悬浮菜单（⋮）---------------- */
+const Pop = (function () {
+  let cur = null;
+  let curAnchor = null;
+  function close() {
+    if (!cur) return;
+    cur.remove();
+    cur = null;
+    curAnchor = null;
+    document.removeEventListener("click", onDoc, true);
+    document.removeEventListener("keydown", onKey, true);
+  }
+  function onDoc(e) {
+    if (!cur) return;
+    if (cur.contains(e.target)) return;
+    // 点 ⋮ 本身交给 toggle 处理，否则会「先关再开」
+    if (e.target.classList && e.target.classList.contains("dots")) return;
+    close();
+  }
+  function onKey(e) { if (e.key === "Escape") close(); }
+
+  function open(anchor, items) {
+    close();
+    const m = el("div", "pop");
+    items.forEach((it) => {
+      if (it.sep) { m.appendChild(el("div", "pop-sep")); return; }
+      const b = el("button", it.danger ? "danger" : "", it.label);
+      if (it.disabled) b.disabled = true;
+      b.addEventListener("click", () => { close(); if (it.onClick) it.onClick(); });
+      m.appendChild(b);
+    });
+    document.body.appendChild(m);
+    const r = anchor.getBoundingClientRect();
+    let left = r.right - m.offsetWidth;
+    if (left < 8) left = 8;
+    if (left + m.offsetWidth > innerWidth - 8) left = innerWidth - m.offsetWidth - 8;
+    let top = r.bottom + 6;
+    if (top + m.offsetHeight > innerHeight - 8) top = Math.max(8, r.top - m.offsetHeight - 6);
+    m.style.left = `${Math.max(8, left)}px`;
+    m.style.top = `${top}px`;
+    cur = m;
+    curAnchor = anchor;
+    setTimeout(() => {
+      document.addEventListener("click", onDoc, true);
+      document.addEventListener("keydown", onKey, true);
+    }, 0);
+  }
+
+  function toggle(anchor, items) {
+    if (cur && curAnchor === anchor) { close(); return; }
+    open(anchor, items);
+  }
+  return { open, toggle, close };
+})();
+
+/* 触发 ⋮ 的三点按钮 */
+function dotsBtn(onClick) {
+  const b = el("button", "dots", "⋮");
+  b.type = "button";
+  b.addEventListener("click", (e) => { e.stopPropagation(); onClick(b); });
+  return b;
+}
+
+/* ---------------- 通用弹窗（改名称 / 修改订阅 / 分享链接）---------------- */
+const Modal = (function () {
+  function build(opts) {
+    return new Promise((resolve) => {
+      const mask = el("div", "modal-mask");
+      const box = el("div", "modal");
+      box.appendChild(el("h3", "", opts.title || ""));
+      if (opts.note) box.appendChild(el("p", "modal-note", opts.note));
+
+      const fields = [];
+      let area = null;
+
+      if (opts.mode === "text") {
+        area = el("textarea", "modal-area");
+        area.rows = opts.rows || 6;
+        area.readOnly = true;
+        area.value = opts.value || "";
+        box.appendChild(area);
+      } else if (Array.isArray(opts.fields)) {
+        opts.fields.forEach((f) => {
+          if (f.label) box.appendChild(el("label", "modal-lbl", f.label));
+          const inp = el("input", "modal-input");
+          inp.value = f.value || "";
+          inp.placeholder = f.placeholder || "";
+          if (f.readonly) inp.readOnly = true;
+          box.appendChild(inp);
+          fields.push({ key: f.key, input: inp });
+        });
+      } else {
+        const inp = el("input", "modal-input");
+        inp.value = opts.value || "";
+        inp.placeholder = opts.placeholder || "";
+        box.appendChild(inp);
+        fields.push({ key: "value", input: inp });
+      }
+
+      const row = el("div", "modal-btns");
+      const cancel = el("button", "", opts.cancelText || "取消");
+      const ok = el("button", "primary", opts.okText || "确定");
+      const done = (val) => { mask.remove(); resolve(val); };
+      cancel.addEventListener("click", () => done(null));
+      ok.addEventListener("click", () => {
+        if (opts.mode === "text") { done(area.value); return; }
+        const out = {};
+        fields.forEach((f) => { out[f.key] = f.input.value.trim(); });
+        done(out);
+      });
+      row.append(cancel, ok);
+      box.appendChild(row);
+      mask.appendChild(box);
+      mask.addEventListener("click", (e) => { if (e.target === mask) done(null); });
+      mask.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") done(null);
+        if (e.key === "Enter" && opts.mode !== "text") ok.click();
+      });
+      document.body.appendChild(mask);
+      const first = opts.mode === "text" ? area : (fields[0] && fields[0].input);
+      if (first) { first.focus(); if (opts.mode === "text") first.select(); }
+    });
+  }
+  return { ask: build };
+})();
+
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) { /* 回退 */ }
+  try {
+    const ta = el("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  } catch (e) { return false; }
+}
+
 /* ---------------- tabs（侧边栏） ---------------- */
 const TITLES = { overview: "概览", outlet: "出口", subs: "订阅", push: "下发", backup: "备份与还原", logs: "日志", account: "账号", docs: "文档" };
 function switchTab(name) {
@@ -353,43 +499,162 @@ $("#btnWarpPrecheck").addEventListener("click", () => safe(() => warp("precheck"
 $("#btnWarpTest").addEventListener("click", () => safe(() => warp("test"), "验证 WARP"));
 $("#btnWarpStatus").addEventListener("click", () => safe(() => warp("status"), "查询状态"));
 
-/* ---------------- 订阅源管理 ---------------- */
+/* ---------------- 订阅源管理（卡片 + 批量） ---------------- */
+const subSel = new Set();
+
+function subKey(s) { return s.id || s.url || s.name || ""; }
+
+function subTitle(s) {
+  const n = (s.name || "").trim();
+  if (n) return n;
+  const u = (s.url || "").replace(/^https?:\/\//, "");
+  return u.split("/")[0] || "未命名订阅";
+}
+
+function syncSubSel() {
+  const subs = STATE?.config?.outlet?.subscriptions || [];
+  const n = subSel.size;
+  const c = $("#subSelCount");
+  if (c) c.textContent = subs.length ? `已选 ${n} 项 / 共 ${subs.length} 个` : "";
+  ["#btnSubDelSel", "#btnSubUpdSel"].forEach((sel) => {
+    const b = $(sel);
+    if (b) b.disabled = !n;
+  });
+  const all = $("#subSelAll");
+  if (all) {
+    all.checked = subs.length > 0 && n === subs.length;
+    all.indeterminate = n > 0 && n < subs.length;
+  }
+}
+
+/* 把节点导出成分享链接（订阅和节点两处共用） */
+async function shareNodes(names) {
+  if (!names || !names.length) { toast("请先选择节点"); return; }
+  const d = await api("/api/nodes/share", "POST", { names });
+  if (!d.items || !d.items.length) { toast(d.message || "没有可导出的节点"); return; }
+  const v = await Modal.ask({
+    title: `分享 ${d.items.length} 个节点`,
+    note: "下面的链接可直接导入 v2rayN / Clash / sing-box 等客户端。",
+    mode: "text",
+    rows: 7,
+    value: d.text,
+    okText: "复制并关闭",
+  });
+  if (v === null) return;
+  const ok = await copyText(d.text);
+  toast(ok ? "已复制到剪贴板" : "请手动全选复制");
+}
+
+async function delSubs(keys, label) {
+  if (!keys.length) { toast("请先选择订阅"); return; }
+  const tip = keys.length === 1
+    ? `确认删除订阅「${label || keys[0]}」？该订阅下的节点会一并移除。`
+    : `确认删除选中的 ${keys.length} 个订阅？这些订阅下的节点会一并移除。`;
+  if (!confirm(tip)) return;
+  const d = await api("/api/subs/del", "POST", { ids: keys });
+  subSel.clear();
+  toast(`已删除 ${d.deleted || keys.length} 个订阅`);
+  await loadState();
+}
+
+async function updateSubs(ids) {
+  if (!ids.length) { toast("请先选择订阅"); return; }
+  let last = "";
+  for (const id of ids) {
+    const d = await api("/api/subs/update", "POST", { id });
+    last = d.message || last;
+  }
+  toast(ids.length === 1 ? last || "已更新" : `已更新 ${ids.length} 个订阅`);
+  await loadState();
+}
+
+async function toggleSub(s) {
+  const on = s.enabled === false;
+  const d = await api("/api/subs/update", "POST", { id: s.id || subKey(s), enabled: on });
+  toast(on ? "已启用" : "已停用");
+  await loadState();
+}
+
+async function editSub(s) {
+  const local = (s.url || "").startsWith("local://");
+  const v = await Modal.ask({
+    title: "修改订阅",
+    note: local ? "这条是本地粘贴的订阅，内容存在本地，不能改地址。" : "",
+    fields: [
+      { key: "name", label: "备注名", value: s.name || "", placeholder: "留空则显示地址" },
+      { key: "url", label: "订阅地址", value: local ? "" : (s.url || ""),
+        placeholder: local ? "本地粘贴" : "https://…", readonly: local },
+      { key: "ua", label: "User-Agent", value: s.ua || "", placeholder: "clash.meta" },
+      { key: "proxy", label: "通过代理拉取（可选）", value: s.proxy || "", placeholder: "socks5://… 或 http://…" },
+    ],
+    okText: "保存",
+  });
+  if (!v) return;
+  const body = { id: s.id || subKey(s), ua: v.ua || "clash.meta", proxy: v.proxy || "" };
+  if (v.name) body.name = v.name;
+  if (v.url && v.url !== s.url) body.url = v.url;
+  const d = await api("/api/subs/update", "POST", body);
+  toast(d.message || "已保存");
+  await loadState();
+}
+
+async function shareSub(s) {
+  const nodeNames = (STATE?.config?.outlet?.sb_nodes || [])
+    .filter((n) => (n.source || "") === (s.name || subTitle(s)))
+    .map((n) => n.name);
+  if (!nodeNames.length) { toast("这个订阅下没有可用节点"); return; }
+  await shareNodes(nodeNames);
+}
+
 function renderSubList(subs) {
   const box = $("#subList");
   clear(box);
-  if (!subs.length) { box.appendChild(el("div", "hint", "还没有订阅源。在下面粘贴地址添加，可添加多个并存。")); return; }
-  const table = el("table", "data");
-  const tr = el("tr");
-  ["备注", "地址", "节点", "更新时间", "启用", "操作"].forEach((h) => tr.appendChild(el("th", "", h)));
-  table.appendChild(tr);
+  // 清掉已被删除的选择
+  const alive = new Set(subs.map(subKey));
+  Array.from(subSel).forEach((k) => { if (!alive.has(k)) subSel.delete(k); });
+
+  if (!subs.length) {
+    box.appendChild(el("div", "hint", "还没有订阅源。在下面粘贴地址添加，可添加多个并存。"));
+    syncSubSel();
+    return;
+  }
+
   subs.forEach((s) => {
-    const row = el("tr");
-    row.appendChild(el("td", "", s.name || s.url));
-    row.appendChild(el("td", "mono", s.url));
-    row.appendChild(el("td", "", String(s.count || 0)));
-    row.appendChild(el("td", "mono", s.updated_at || "-"));
-    const enTd = el("td");
-    const en = el("input"); en.type = "checkbox"; en.checked = !!s.enabled;
-    en.addEventListener("change", () => safe(async () => {
-      const d = await api("/api/subs/update", "POST", { id: s.id, enabled: en.checked });
-      toast(d.message); loadState();
-    }, "切换启用"));
-    enTd.appendChild(en); row.appendChild(enTd);
-    const opTd = el("td");
-    const up = el("button", "", "更新"); up.className = "mini";
-    up.addEventListener("click", () => safe(async () => {
-      const d = await api("/api/subs/update", "POST", { id: s.id });
-      toast(d.message); loadState();
-    }, "更新订阅"));
-    const del = el("button", "", "删除"); del.className = "mini bad";
-    del.addEventListener("click", () => safe(async () => {
-      await api("/api/subs/del", "POST", { id: s.id });
-      toast("已删除订阅"); loadState();
-    }, "删除订阅"));
-    opTd.appendChild(up); opTd.appendChild(del); row.appendChild(opTd);
-    table.appendChild(row);
+    const key = subKey(s);
+    const card = el("div", "subcard");
+    if (s.enabled === false) card.classList.add("off");
+
+    const head = el("div", "sc-head");
+    const chk = el("input");
+    chk.type = "checkbox";
+    chk.checked = subSel.has(key);
+    chk.addEventListener("change", () => {
+      if (chk.checked) subSel.add(key); else subSel.delete(key);
+      syncSubSel();
+    });
+    head.appendChild(chk);
+    head.appendChild(el("div", "sc-name", subTitle(s)));
+    head.appendChild(dotsBtn((btn) => Pop.toggle(btn, [
+      { label: "更新", onClick: () => safe(() => updateSubs([s.id || key]), "更新订阅") },
+      { label: "修改", onClick: () => safe(() => editSub(s), "修改订阅") },
+      { label: "分享全部节点", onClick: () => safe(() => shareSub(s), "分享订阅") },
+      { label: s.enabled === false ? "启用此订阅" : "停用此订阅", onClick: () => safe(() => toggleSub(s), "切换订阅") },
+      { sep: true },
+      { label: "删除", danger: true, onClick: () => safe(() => delSubs([key], subTitle(s)), "删除订阅") },
+    ])));
+    card.appendChild(head);
+
+    const meta = el("div", "sc-meta");
+    meta.appendChild(el("span", "sc-badge", `节点数: ${s.count || 0}`));
+    meta.appendChild(el("span", "sc-badge mono", s.updated_at || "未更新"));
+    if (s.enabled === false) meta.appendChild(pill("已停用", "bad"));
+    card.appendChild(meta);
+
+    const url = (s.url || "").startsWith("local://") ? "本地粘贴" : (s.url || "");
+    card.appendChild(el("div", "sc-url", url));
+    box.appendChild(card);
   });
-  box.appendChild(table);
+  syncSubSel();
 }
 
 /* ---------------- 节点管理（v2rayA 风格：网格卡片 + 来源分组 + 搜索 + 延迟） ---------------- */
@@ -430,10 +695,108 @@ function filterNodes() {
   });
 }
 
+const nodeSel = new Set();
+
+function nodeDisSet() { return new Set(STATE?.config?.outlet?.sb_disabled || []); }
+function nodeRemoved() { return STATE?.config?.outlet?.sb_removed || []; }
+
 function syncSelCount() {
-  const dis = new Set(...STATE?.config?.outlet?.sb_disabled || []);
-  const selCount = nodeCache.filter((n) => !dis.has(n.name)).length;
-  $("#nodeSelCount").textContent = nodeCache.length ? `已选 ${selCount}/${nodeCache.length} 项` : "";
+  const n = nodeSel.size;
+  const c = $("#nodeSelCount");
+  if (c) c.textContent = nodeCache.length ? `已选 ${n} 项 / 共 ${nodeCache.length} 个` : "";
+  ["#btnNodeDelSel", "#btnNodeShareSel", "#btnNodeEnableSel", "#btnNodeDisableSel"].forEach((s) => {
+    const b = $(s);
+    if (b) b.disabled = n === 0;
+  });
+  const all = $("#nodeSelAll");
+  if (all) {
+    const visible = filterNodes().length;
+    all.checked = visible > 0 && n >= visible;
+    all.indeterminate = n > 0 && n < visible;
+  }
+  const rb = $("#btnNodeRestore");
+  if (rb) {
+    const cnt = nodeRemoved().length;
+    rb.hidden = cnt === 0;
+    rb.textContent = `恢复已删除 (${cnt})`;
+  }
+}
+
+async function setDisabled(names, disabled) {
+  if (!names.length) { toast("请先选择节点"); return; }
+  const cur = nodeDisSet();
+  names.forEach((x) => { if (disabled) cur.add(x); else cur.delete(x); });
+  await api("/api/nodes", "POST", { disabled: Array.from(cur) });
+  toast(disabled ? `已停用 ${names.length} 个节点` : `已启用 ${names.length} 个节点`);
+  await loadState();
+}
+
+async function delNodes(names) {
+  if (!names.length) { toast("请先选择节点"); return; }
+  const tip = names.length === 1
+    ? `确认删除节点「${names[0]}」？\n订阅里仍保留，可用「恢复已删除」找回。`
+    : `确认删除选中的 ${names.length} 个节点？\n订阅里仍保留，可用「恢复已删除」找回。`;
+  if (!confirm(tip)) return;
+  await api("/api/nodes", "POST", { delete: names });
+  names.forEach((x) => nodeSel.delete(x));
+  toast(`已删除 ${names.length} 个节点`);
+  await loadState();
+}
+
+async function restoreNodes(back) {
+  await api("/api/nodes", "POST", { restore: back });
+  toast(`已恢复 ${back.length} 个节点`);
+  await loadState();
+}
+
+async function renameNode(n) {
+  const v = await Modal.ask({
+    title: "修改节点名称",
+    note: "只改本地显示名与配置里的 tag，不影响服务器地址。",
+    value: n.name,
+    placeholder: "新名称",
+    okText: "保存",
+  });
+  if (!v) return;
+  const to = (v.value || "").trim();
+  if (!to || to === n.name) return;
+  await api("/api/nodes", "POST", { rename: { from: n.name, to } });
+  nodeSel.delete(n.name);
+  toast("已重命名");
+  await loadState();
+}
+
+async function testOne(n) {
+  const one = nodeCache.find((x) => x.name === n.name);
+  if (!one) return;
+  const box = $("#subOut");
+  if (box) box.appendChild(el("div", "hint", `正在测速：${n.name}…`));
+  const d = await api("/api/subs/test", "POST", { nodes: [one] });
+  (d.results || []).forEach((r) => { delayMap[r.tag] = r; });
+  renderNodes();
+  const r = (d.results || [])[0];
+  toast(!r ? "测速失败" : (r.reachable ? `${n.name}: ${r.ms}ms` : `${n.name}: 不可达`));
+}
+
+function nodeMenuItems(n) {
+  const isOff = nodeDisSet().has(n.name);
+  const isDef = STATE?.config?.outlet?.sb_node === n.name;
+  return [
+    { label: "测试延迟", onClick: () => safe(() => testOne(n), "测速") },
+    { label: "修改名称", onClick: () => safe(() => renameNode(n), "改名") },
+    { label: "分享链接", onClick: () => safe(() => shareNodes([n.name]), "分享") },
+    { label: isOff ? "启用此节点" : "停用此节点", onClick: () => safe(() => setDisabled([n.name], !isOff), "切换节点") },
+    {
+      label: isDef ? "取消默认出口" : "设为默认出口",
+      onClick: () => safe(async () => {
+        await api("/api/nodes", "POST", { node: isDef ? "" : n.name });
+        toast(isDef ? "已取消默认出口" : "已设为默认出口");
+        await loadState();
+      }, "设默认"),
+    },
+    { sep: true },
+    { label: "删除", danger: true, onClick: () => safe(() => delNodes([n.name]), "删除节点") },
+  ];
 }
 
 function renderNodeGrid() {
@@ -444,23 +807,36 @@ function renderNodeGrid() {
     box.appendChild(el("div", "hint", nodeCache.length ? "无匹配节点" : "暂无节点，请先在上方添加订阅并拉取。"));
     return;
   }
-  const dis = new Set(...(STATE?.config?.outlet?.sb_disabled || []));
+  const dis = nodeDisSet();
   const defaultNode = STATE?.config?.outlet?.sb_node || "";
   items.forEach((n) => {
     const card = el("div", "node-card");
     const disabled = dis.has(n.name);
     if (disabled) card.classList.add("off");
     if (defaultNode === n.name) card.classList.add("active");
-    const chk = el("input"); chk.type = "checkbox"; chk.checked = !disabled;
+    if (nodeSel.has(n.name)) card.classList.add("sel");
+    card.setAttribute("data-n", n.name);
+
     const head = el("div", "nc-head");
+    const chk = el("input");
+    chk.type = "checkbox";
+    chk.checked = nodeSel.has(n.name);
+    chk.addEventListener("change", () => {
+      if (chk.checked) nodeSel.add(n.name); else nodeSel.delete(n.name);
+      card.classList.toggle("sel", chk.checked);
+      syncSelCount();
+    });
     head.appendChild(chk);
     head.appendChild(el("div", "nc-name", n.name));
+    head.appendChild(dotsBtn((btn) => Pop.toggle(btn, nodeMenuItems(n))));
+    card.appendChild(head);
+
     const meta = el("div", "nc-meta");
     meta.appendChild(el("span", "nc-type", n.type));
     meta.appendChild(el("span", "nc-src", n.source || "本地"));
-    meta.appendChild(el("span", "nc-addr", `${n.server}:${n.port}`));
-    card.appendChild(head);
     card.appendChild(meta);
+    card.appendChild(el("div", "nc-addr", `${n.server}:${n.port}`));
+
     const d = delayMap[n.name];
     let delayEl;
     if (!d) {
@@ -471,23 +847,11 @@ function renderNodeGrid() {
       delayEl = el("span", "nc-delay bad", "TIMEOUT");
     }
     card.appendChild(delayEl);
-    chk.addEventListener("change", () => safe(async () => {
-      const all = [...$("#nodeGrid input[type=checkbox]"), ...$("#nodeTbody input[type=checkbox]")];
-      // 重新计算全集禁用：基于 cache 全集
-      const disSet = new Set();
-      nodeCache.forEach((nn) => {
-        const c = document.querySelector(`.node-card[data-n="${CSS.escape(nn.name)}"] input[type=checkbox]`);
-        const row = document.querySelector(`#nodeTbody tr[data-n="${CSS.escape(nn.name)}"] input[type=checkbox]`);
-        const checked = c ? c.checked : (row ? row.checked : !disSet.has(nn.name));
-        if (!checked) disSet.add(nn.name);
-      });
-      const d = await api("/api/nodes", "POST", { disabled: Array.from(disSet) });
-      loadState();
-    }, "更新节点"));
-    card.setAttribute("data-n", n.name);
+
     card.addEventListener("click", (e) => {
-      if (e.target.tagName === "INPUT") return;
-      chk.click();
+      if (e.target.tagName === "INPUT" || e.target.classList.contains("dots")) return;
+      chk.checked = !chk.checked;
+      chk.dispatchEvent(new Event("change"));
     });
     box.appendChild(card);
   });
@@ -498,52 +862,61 @@ function renderNodeTable(nodes, sbNode) {
   clear(tb);
   const items = filterNodes();
   if (!items.length) {
-    tb.appendChild(el("tr")).appendChild(el("td", "", nodeCache.length ? "无匹配节点" : "暂无节点，请先在上方添加订阅并拉取。")).setAttribute("colspan", "6");
+    const td = el("td", "", nodeCache.length ? "无匹配节点" : "暂无节点，请先在上方添加订阅并拉取。");
+    td.setAttribute("colspan", "7");
+    const tr = el("tr");
+    tr.appendChild(td);
+    tb.appendChild(tr);
     return;
   }
-  const dis = new Set(...(STATE?.config?.outlet?.sb_disabled || []));
+  const dis = nodeDisSet();
   items.forEach((n) => {
     const row = el("tr");
     row.setAttribute("data-n", n.name);
-    // 启用
-    const enTd = el("td");
-    const en = el("input"); en.type = "checkbox"; en.checked = !dis.has(n.name);
-    en.addEventListener("change", () => safe(async () => {
-      const disSet = new Set();
-      $$("#nodeGrid .node-card").forEach((c) => {
-        if (!c.querySelector("input")?.checked) disSet.add(c.getAttribute("data-n"));
-      });
-      $$("#nodeTbody tr").forEach((r) => {
-        if (!r.querySelector("input")?.checked) disSet.add(r.getAttribute("data-n"));
-      });
-      const d = await api("/api/nodes", "POST", { disabled: Array.from(disSet) });
-      loadState();
-    }, "更新节点"));
-    enTd.appendChild(en); row.appendChild(enTd);
-    // 名称（可改名）
+    if (dis.has(n.name)) row.classList.add("off");
+
+    const selTd = el("td");
+    const chk = el("input");
+    chk.type = "checkbox";
+    chk.checked = nodeSel.has(n.name);
+    chk.addEventListener("change", () => {
+      if (chk.checked) nodeSel.add(n.name); else nodeSel.delete(n.name);
+      syncSelCount();
+    });
+    selTd.appendChild(chk);
+    row.appendChild(selTd);
+
     const nameTd = el("td");
-    const inp = el("input"); inp.value = n.name; inp.className = "name-edit";
-    inp.addEventListener("change", () => safe(async () => {
-      const to = inp.value.trim();
-      if (!to || to === n.name) return;
-      await api("/api/nodes", "POST", { rename: { from: n.name, to } });
-      toast("已重命名"); loadState();
-    }, "重命名"));
-    nameTd.appendChild(inp); row.appendChild(nameTd);
-    // 来源
+    const nameBox = el("div", "row");
+    nameBox.appendChild(el("span", "mono", n.name));
+    nameBox.appendChild(dotsBtn((btn) => Pop.toggle(btn, nodeMenuItems(n))));
+    nameTd.appendChild(nameBox);
+    row.appendChild(nameTd);
+
+    row.appendChild(el("td")).appendChild(pill(dis.has(n.name) ? "停用" : "启用", dis.has(n.name) ? "bad" : "ok"));
     row.appendChild(el("td", "", n.source || "本地"));
-    // 类型
     row.appendChild(el("td")).appendChild(pill(n.type, "mute"));
-    // 测速
-    const tTd = el("td", "", "—"); tTd.setAttribute("data-name", n.name); row.appendChild(tTd);
-    // 默认
+
+    const tTd = el("td", "", "—");
+    tTd.setAttribute("data-name", n.name);
+    const d = delayMap[n.name];
+    if (d) {
+      tTd.textContent = "";
+      tTd.appendChild(pill(d.reachable ? `${d.ms}ms` : "不可达", d.reachable ? (d.ms < 300 ? "ok" : "warn") : "bad"));
+    }
+    row.appendChild(tTd);
+
     const defTd = el("td");
-    const r = el("input"); r.type = "radio"; r.name = "defNode"; r.checked = (n.name === sbNode);
+    const r = el("input");
+    r.type = "radio";
+    r.name = "defNode";
+    r.checked = (n.name === sbNode);
     r.addEventListener("change", () => safe(async () => {
       await api("/api/nodes", "POST", { node: n.name });
       loadState();
     }, "设默认"));
-    defTd.appendChild(r); row.appendChild(defTd);
+    defTd.appendChild(r);
+    row.appendChild(defTd);
     tb.appendChild(row);
   });
 }
@@ -551,6 +924,9 @@ function renderNodeTable(nodes, sbNode) {
 function renderNodes() {
   const cfg = STATE?.config?.outlet;
   nodeCache = cfg?.sb_nodes || [];
+  // 清掉已被删除/不存在的选择项
+  const alive = new Set(nodeCache.map((n) => n.name));
+  Array.from(nodeSel).forEach((k) => { if (!alive.has(k)) nodeSel.delete(k); });
   const dis = new Set(cfg?.sb_disabled || []);
   refreshSourceSel();
   syncSelCount();
@@ -598,6 +974,48 @@ $("#btnNodeTest").addEventListener("click", () => safe(async () => {
   const bad = (d.results || []).filter((r) => !r.reachable).length;
   out.appendChild(el("div", "hint", `测速完成：不可达 ${bad} 个（TCP 耗时，真实延迟略高）。`));
 }, "节点测速"));
+
+/* ---------------- 批量选择 / 批量操作 ---------------- */
+$("#nodeSelAll").addEventListener("change", (e) => {
+  const on = e.target.checked;
+  nodeSel.clear();
+  if (on) filterNodes().forEach((n) => nodeSel.add(n.name));
+  renderNodes();
+});
+
+$("#subSelAll").addEventListener("change", (e) => {
+  const on = e.target.checked;
+  subSel.clear();
+  if (on) (STATE?.config?.outlet?.subscriptions || []).forEach((s) => subSel.add(subKey(s)));
+  renderSubList(STATE?.config?.outlet?.subscriptions || []);
+});
+
+$("#btnSubDelSel").addEventListener("click", () => safe(() => delSubs(Array.from(subSel)), "批量删除订阅"));
+$("#btnSubUpdSel").addEventListener("click", () => safe(async () => {
+  const subs = STATE?.config?.outlet?.subscriptions || [];
+  const ids = subs.filter((s) => subSel.has(subKey(s))).map((s) => s.id || subKey(s)).filter(Boolean);
+  if (!ids.length) { toast("所选订阅没有可更新的 id"); return; }
+  await updateSubs(ids);
+}, "批量更新订阅"));
+
+$("#btnNodeDelSel").addEventListener("click", () => safe(() => delNodes(Array.from(nodeSel)), "批量删除节点"));
+$("#btnNodeShareSel").addEventListener("click", () => safe(() => shareNodes(Array.from(nodeSel)), "分享节点"));
+$("#btnNodeEnableSel").addEventListener("click", () => safe(() => setDisabled(Array.from(nodeSel), false), "启用节点"));
+$("#btnNodeDisableSel").addEventListener("click", () => safe(() => setDisabled(Array.from(nodeSel), true), "停用节点"));
+$("#btnNodeRestore").addEventListener("click", () => safe(async () => {
+  const back = nodeRemoved();
+  if (!back.length) { toast("没有已删除的节点"); return; }
+  const v = await Modal.ask({
+    title: "恢复已删除的节点",
+    note: `共 ${back.length} 个。点确定后重新拉取订阅并恢复这些节点。`,
+    mode: "text",
+    rows: 5,
+    value: back.join("\n"),
+    okText: "全部恢复",
+  });
+  if (v === null) return;
+  await restoreNodes(back);
+}, "恢复节点"));
 
 function applyRouteUI(outlet) {
   const mode = outlet.sb_route || "auto";
@@ -804,6 +1222,7 @@ const Account = (function () {
   const SRC = {
     file: ["已启用 · 界面设置", "ok"],
     env: ["已启用 · 环境变量", "ok"],
+    default: ["初始密码 admin · 建议立即修改", "warn"],
     open: ["未启用 · 任何人可访问", "bad"],
   };
   let info = { required: false, user: "", source: "open", min_len: 8 };

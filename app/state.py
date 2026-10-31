@@ -42,6 +42,8 @@ class OutletCfg(BaseModel):
     sb_nodes: list[dict[str, Any]] = Field(default_factory=list)
     # 被用户停用的节点 name 列表（仍在订阅里，但不进 selector / 不分流）
     sb_disabled: list[str] = Field(default_factory=list)
+    # 被用户删除的节点 name 黑名单（订阅里还有，但不再出现在列表/配置里）
+    sb_removed: list[str] = Field(default_factory=list)
 
     # 多订阅源：{id,name,url,ua,proxy,enabled,updated_at,count}
     subscriptions: list[dict[str, Any]] = Field(default_factory=list)
