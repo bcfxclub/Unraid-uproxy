@@ -64,7 +64,20 @@ UPX_PASSWORD="换成你自己的长随机串" ./install.sh
 
 ### 〇、在 Unraid Web 界面手工创建容器（逐项对照）
 
-如果你不想用脚本，可以在 Unraid「Docker → 添加容器 → 从零开始」手动填表。**前提**：镜像必须先在 Unraid 上构建好（`docker build -t uproxy:latest .`，或先跑一次 `install.sh` 的构建步骤），否则「存储库」填 `uproxy:latest` 会提示找不到镜像。「存储库(Repository)」就是 Docker 镜像名，本地构建的填 `uproxy:latest` 即可。
+如果你不想用脚本，可以在 Unraid「Docker → 添加容器 → 从零开始」手动填表。
+
+**重要：本项目没有发布到 Docker Hub 等公共镜像仓库，不存在可直接「拉取」的镜像。** 因此「存储库(Repository)」不能填 `docker.io/xxx/uproxy` 这类公共地址，只能填你在 Unraid **本地构建**出的镜像名 `uproxy:latest`。也就是说，**手工填表前必须先把镜像构建出来**，否则 Unraid 创建容器时会因找不到镜像而失败（即使填了 `uproxy:latest` 也无济于事，因为它不是从网上拉的，而是你本地 `docker build` 出来的）。
+
+**步骤 0：先构建镜像（在 Unraid 终端执行）**
+```bash
+# 取得代码（放到阵列上，便于持久与后续更新）
+mkdir -p /mnt/user/appdata/uproxy && cd /mnt/user/appdata/uproxy
+git clone https://github.com/bcfxclub/Unraid-uproxy.git repo
+cd repo
+docker build -t uproxy:latest .      # 构建本地镜像，约几分钟
+docker images uproxy:latest           # 确认镜像已存在
+```
+镜像构建好之后，回到 Unraid Web 界面手工填表，「存储库」填 `uproxy:latest` 即可。
 
 逐项对照下表填写：
 
@@ -91,6 +104,13 @@ UPX_PASSWORD="换成你自己的长随机串" ./install.sh
 
 > 关键点：**WebUI 字段一定要填 `http://[IP]:[PORT:8765]/`**（`[IP]`/`[PORT:8765]` 是 Unraid 占位符，自动替换为本机 IP 与端口）。填了之后，Docker 页面 uproxy 卡片上才会出现可点击的「WebUI」按钮，无需手动输入地址。
 > `/config` 必须挂到阵列/缓存上的 `state` 目录，否则重启后配置与密码全丢；Docker 套接字务必选「设备」类型挂载。
+
+**后期更新**：本项目镜像是本地构建的，**不会**像公共镜像那样「一键拉新」。更新 = 拉最新代码 + 重建镜像 + 重启容器，由仓库里的 `update.sh` 完成：
+```bash
+cd /mnt/user/appdata/uproxy/repo
+./update.sh          # = git pull 最新代码 + 重建镜像 + 重启容器（密码自动沿用）
+```
+若想「全自动」：在 Unraid「设置 → 用户脚本(User Scripts)」里新建一个每周/每天执行的脚本，内容填 `/mnt/user/appdata/uproxy/repo/update.sh >> /mnt/user/appdata/uproxy/update.log 2>&1`。注意——自动更新会重启容器、WebUI 短暂中断，建议放在凌晨等低峰时段；且要求本地仓库没有未提交的冲突改动（`update.sh` 用 `git pull --ff-only`，遇冲突会中止而非覆盖）。
 
 ### 一、手工部署（完全手动，不依赖 install.sh）
 
