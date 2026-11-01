@@ -147,26 +147,63 @@ def main() -> int:
     print(f"[4] 临时测速配置版本自适应：1.12 ddr={c12['route'].get('default_domain_resolver')}，"
           f"1.10 无 ddr={'default_domain_resolver' not in c10['route']}")
 
-    # 5. _run_probe 生成的临时测速规则必须对 1.12 干净（不能再带已删除的 inbound 字段），
-    #    否则 1.12.7 上 sing-box check 直接拒绝 -> 全部节点测不出延迟（用户报的真 bug）。
+    # 5. _run_probe 生成的临时测速规则必须全版本合法：只用 `inbound` 入站标签数组，
+    #    不再生成 1.11+ 的 `inbound_port` / `inbound_port_range`（那俩依赖 sb_version
+    #    探测正确，一旦探测不可信就把老二进制撑爆 FATAL "unknown field"）。
     captured = {}
-    nettest.outlets.sb_version = lambda *a, **k: (1, 12)
+    nettest.outlets.sb_version = lambda *a, **k: (1, 12)   # 故意喂 1.12，证明不再依赖它
     nettest.outlets._sb_ok = lambda: (True, "/fake/sing-box")
     nettest.outlets.temp_run = lambda conf, *a, **k: (captured.update(conf=conf) or {"ok": True})
     nettest.outlets.stop_temp = lambda *a, **k: None
     nettest.test_nodes(NODES, mode="http", url="http://probe.local/204")
     conf = captured.get("conf")
-    bad_rule = False
-    if conf:
-        for ru in conf.get("route", {}).get("rules", []):
-            if "inbound" in ru and not any(k.startswith("inbound_port") for k in ru):
-                bad_rule = True
-    if bad_rule or not conf:
-        fails.append("1.12 临时测速规则仍残留已删除的 inbound 字段（会导致测速降级）")
+    no_inbound_port = not any(
+        ("inbound_port" in ru or "inbound_port_range" in ru)
+        for ru in (conf or {}).get("route", {}).get("rules", [])
+    )
+    has_inbound_tag = any(
+        ru.get("inbound") and isinstance(ru["inbound"], list)
+        for ru in (conf or {}).get("route", {}).get("rules", [])
+    )
+    if not conf or not no_inbound_port or not has_inbound_tag:
+        fails.append("临时测速规则未统一为全版本合法的 `inbound` 标签数组（仍混入了 inbound_port）")
     else:
-        ports = [ru for ru in conf["route"]["rules"] if "inbound_port" in ru]
-        print(f"[5] _run_probe 1.12 规则干净：共 {len(conf['route']['rules'])} 条规则，"
-              f"inbound_port 规则 {len(ports)} 条，无残留 inbound 字段")
+        print(f"[5] _run_probe 规则全版本合法：共 {len(conf['route']['rules'])} 条，"
+              f"全部用 inbound 标签数组、无 inbound_port")
+
+    # 6. 真跑 sing-box check（若本机/镜像里有二进制）——这才是真正卡住回归的一道。
+    #    没有二进制就跳过并标注，绝不允许「假想断言通过=真能通过」。
+    import os as _os
+    import json as _json
+    import subprocess as _sp
+    real_bin = _os.environ.get("UPX_SB_BIN", "/usr/local/bin/sing-box")
+    have_bin = _os.path.isfile(real_bin) and _os.access(real_bin, _os.X_OK)
+    if have_bin:
+        # 真实现：nettest._conf(version=None) 会走 outlets.sb_version() 去探测这个
+        # 真实二进制，正好验证「探测出的版本 + 全版本合法的 inbound 规则」能否过 check。
+        conf6 = nettest._conf(
+            [{"type": "vmess", "tag": "n1", "server": "127.0.0.1", "server_port": 1}],
+            [{"type": "mixed", "tag": "probe-0", "listen": "127.0.0.1", "listen_port": 20000}],
+            [{"inbound": ["probe-0"], "outbound": "n1"}], version=None)
+        cpath = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "sbtest6.json")
+        with open(cpath, "w", encoding="utf-8") as f:
+            _json.dump(conf6, f, ensure_ascii=False)
+        chk = _sp.run([real_bin, "check", "-c", cpath],
+                      capture_output=True, text=True, timeout=120)
+        try:
+            _os.remove(cpath)
+        except OSError:
+            pass
+        verprobe = _sp.run([real_bin, "version"], capture_output=True, text=True, timeout=30)
+        first = (verprobe.stdout or verprobe.stderr or "").strip().splitlines()
+        vlabel = first[0] if first else real_bin
+        if chk.returncode != 0:
+            fails.append(f"真实 sing-box check 拒绝临时测速配置（{vlabel}）："
+                         f"{(chk.stderr or chk.stdout)[:300]}")
+        else:
+            print(f"[6] 真实 sing-box check 通过（{vlabel}），临时测速配置真实可用")
+    else:
+        print(f"[6] 跳过：本机无 sing-box 二进制（{real_bin}），无法真跑 check")
 
     if fails:
         print("\n失败：")

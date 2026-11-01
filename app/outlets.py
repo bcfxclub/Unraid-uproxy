@@ -193,18 +193,26 @@ def sb_version(image: str = "") -> tuple[int, int]:
     为什么要探：`action: reject` 是 1.11 才有的，而旧的 block 出站 1.13 又被删了；
     1.12.0 起又强制要求显式 `route.default_domain_resolver`，缺了直接 FATAL。
     写死任何一种，碰到另一侧版本就是「配置被拒、整个代理起不来」。
-    探测失败时按 1.12 处理（当前镜像基本都是 1.12+，且显式字段在 1.11 也没副作用风险更低）。
+
+    探测失败时的兜底**必须按旧版（1.10）处理，而不是按最新**：因为一旦 `version`
+    命令没跑通（rc 非 0 / 输出格式不符），说明我们无法确证它的新语法，此时若仍
+    按 1.12 生成 `inbound_port`/`default_domain_resolver`/`type+server` 等新字段，
+    会被实际偏老的二进制拒绝（报 "unknown field"），整个测速/起代理就崩。
+    按 1.10 生成的是「全版本通用」的旧写法，偏新二进制也只会忽略而非拒绝。
     """
     ok, binp = _sb_ok()
     if not ok:
-        return (1, 11)
+        return (1, 10)
     txt = ""
     r = host.run([binp, "version"], timeout=30)
     txt = (r.get("out") or "") + (r.get("err") or "")
+    # sing-box 输出形如 "sing-box 1.12.7"，取「前两个数字段」。
+    # 兜底匹配 3 段版本号，防止 `version X.Y.Z` 文案变化。
     m = re.search(r"version\s+(\d+)\.(\d+)", txt, re.I) or re.search(r"(\d+)\.(\d+)\.\d+", txt)
     if r.get("rc") == 0 and m:
         return (int(m.group(1)), int(m.group(2)))
-    return (1, 12)
+    # 探测不可信：按全版本通用的旧写法处理（见函数说明），不要默认按最新。
+    return (1, 10)
 
 
 def _sb_config(cfg: st.AppCfg, version: tuple[int, int] | None = None,

@@ -151,24 +151,23 @@ def _run_probe(nodes: list[dict], url: str, timeout_ms: int) -> dict:
         port = BASE_PORT + idx
         inbounds.append({"type": "mixed", "tag": in_tag,
                          "listen": "127.0.0.1", "listen_port": port})
-        pairs.append((port, tag, name))
+        # 元组里多存一份入站 tag：规则要用它做 `inbound` 匹配
+        pairs.append((port, tag, name, in_tag))
 
     if not pairs:
         return {"results": bad, "note": ""}
 
-    # sing-box 1.11 起废弃、1.12 起**删除**了 route 规则里的 `inbound` 字段，
-    # 改用 `inbound_port` / `inbound_port_range`。当前镜像锁 1.12.7，如果用旧字段，
-    # 「按端口把探测流量分给各节点」的规则会被整个忽略，所有流量掉到 final:direct
-    # （大陆直连不通），表现就是「每个节点 HTTP 实测全超时」——正是用户报的现象。
-    # 这里按版本分支：1.11+ 用 inbound_port，1.10 及更早用 inbound。
-    ver = outlets.sb_version()
-    use_port = ver >= (1, 11)
-    for p in pairs:
-        port, _tag, _name = p
-        if use_port:
-            rules.append({"inbound_port": port, "outbound": _tag})
-        else:
-            rules.append({"inbound": [f"probe-{pairs.index(p)}"], "outbound": _tag})
+    # 分流规则统一用 `inbound` 入站标签数组形式：这是 1.10 / 1.11 / 1.12 全版本
+    # 都合法的写法，不依赖去猜「这个二进制到底支不支持 inbound_port」。
+    #
+    # 之前按版本分支生成 `inbound_port`（1.11+）/ `inbound`（1.10）会踩坑：一旦
+    # sb_version() 探测不可信（命令没跑通、兜底值方向错），就会给偏老的二进制塞
+    # 它不认识的字段，sing-box `check` 直接 FATAL "unknown field inbound_port"，
+    # 整轮 HTTP 实测崩掉、全部降级成 TCP 握手。用 `inbound` 标签数组则任何版本都
+    # 能识别（新内核把它当 legacy 仍合法，旧内核本就是它的主写法），根治该问题。
+    # 每个入站有唯一 tag（probe-<idx>），用它匹配即可，无需按端口去猜字段。
+    for _port, _tag, _name, in_tag in pairs:
+        rules.append({"inbound": [in_tag], "outbound": _tag})
 
     ok, binp = outlets._sb_ok()
     if not ok:
@@ -177,12 +176,14 @@ def _run_probe(nodes: list[dict], url: str, timeout_ms: int) -> dict:
     conf = _conf(outs, inbounds, rules)
     got = outlets.temp_run(conf, "sbtest", "sbtest", BASE_PORT, timeout=12)
     if not got["ok"]:
+        # 把真实原因（配置被拒 / 端口没起来 / 二进制缺失）透传给前端，
+        # 别让「降级 TCP 握手」把 FATAL 报错盖住。
         return {"results": [], "note": f"临时 sing-box 启动失败：{got['message']}"}
 
     secs = max(2, int(round(timeout_ms / 1000)))
 
-    def one(pair: tuple[int, str, str]) -> dict:
-        port, _tag, name = pair
+    def one(pair: tuple) -> dict:
+        port, _tag, name, _in_tag = pair
         return {"tag": name, **_probe_one(url, port, secs)}
 
     try:
