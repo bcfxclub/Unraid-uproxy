@@ -61,7 +61,8 @@ def unraid_version() -> str:
     纯数字（如 13/24），拿去当 Unraid 版本号会误识别（曾把 "linux" 里的数字读
     成 13）。Unraid 的版本只在 unraid-version 或带 "Unraid" 的 PRETTY_NAME 里。
 
-    两个来源都需要宿主 /etc 挂进容器，所以模板里 /etc 已设为 Required=true。
+    两个来源都来自宿主 /etc，模板里以单文件方式挂进容器
+    （/etc/unraid-version、/etc/os-release，只读），故无需挂整个 /etc 目录。
     """
     unraid_files = [S.hpath("etc/unraid-version"), "/etc/unraid-version"]
     osrelease_files = [S.hpath("etc/os-release"), "/etc/os-release"]
