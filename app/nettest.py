@@ -89,10 +89,15 @@ def _conf(outs: list[dict], inbounds: list[dict], rules: list[dict],
     ver = version or outlets.sb_version()
     new_dns = ver >= (1, 12)
     if new_dns:
-        # 1.12 起 DNS 服务器用 type+server 写法；default_domain_resolver 指向 ali。
+        # 1.12 起 DNS 服务器用 type+server 写法；默认域解析器指向 ali。
+        # 关键：DNS 服务器加 "detour": "direct" —— 保证「去查 DNS 服务器」这一步
+        # 永远走大陆直连（跟主配置 route.build 的 {protocol: dns -> direct} 对齐）。
+        # 不能让它跟着 final 走：一旦 final 是某个节点，DNS 解析就被送进未必连通的
+        # 那条节点，解析直接失败 -> 每个节点「经 HTTP 出目标」全超时。这是测速全
+        # 不可用的核心根因之一。
         dns_block = {"servers": [
-            {"type": "udp", "tag": "ali", "server": "223.5.5.5"},
-            {"type": "udp", "tag": "dnspod", "server": "119.29.11.11"},
+            {"type": "udp", "tag": "ali", "server": "223.5.5.5", "detour": "direct"},
+            {"type": "udp", "tag": "dnspod", "server": "119.29.11.11", "detour": "direct"},
         ], "final": "ali"}
     else:
         dns_block = {"servers": [{"address": "223.5.5.5"},
@@ -105,6 +110,10 @@ def _conf(outs: list[dict], inbounds: list[dict], rules: list[dict],
         {"outbound": "direct", "protocol": "dns"},
         {"outbound": "direct", "ip_is_private": True},
     ]
+    # final 保持 direct：非直连的目标（解析出的境外 IP）落到兜底由用户主配置的
+    # sb_final 决定（默认 proxy）；但临时测速场景里，命中「inbound -> 某节点」的
+    # 规则会先把流量分给指定节点，所以 final=direct 只会兜住「没命中任何节点规则」
+    # 的那部分（私有/DNS/局域网），不会把节点流量改道。这跟主配置一致。
     route_block: dict = {"rules": safety + list(rules), "final": "direct"}
     # 关键：临时实例也要和主配置一样开 auto_detect_interface。否则容器里 direct
     # 出站（节点 detour / final）会选错出口网卡，表现为「TCP 握手能通、但经节点

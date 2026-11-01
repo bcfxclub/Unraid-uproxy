@@ -138,14 +138,20 @@ def main() -> int:
         fails.append("1.12 临时测速配置缺 route.default_domain_resolver（会 FATAL）")
     if not any(s.get("tag") == "ali" for s in c12["dns"]["servers"]):
         fails.append("1.12 临时测速配置缺 ali DNS 服务器")
+    # 关键回归：1.12 临时测速的 DNS 服务器必须带 "detour": "direct"。
+    # 否则在大陆机房「去查 DNS」这一步会跟着 final（某节点）走，解析被送进
+    # 未必连通的节点 -> 每个节点 HTTP 实测全超时。DNS 出站必须始终大陆直连。
+    if any(not s.get("detour", "direct") == "direct" for s in c12["dns"]["servers"]):
+        fails.append("1.12 临时测速 DNS 服务器缺 detour:direct（DNS 出站会被送进节点，全超时）")
     c10 = nettest._conf(
         [{"type": "vmess", "tag": "n1"}],
         [{"type": "mixed", "tag": "p", "listen": "127.0.0.1", "listen_port": 20000}],
         [{"inbound": ["p"], "outbound": "n1"}], version=(1, 10))
     if "default_domain_resolver" in c10["route"]:
         fails.append("1.10 临时测速配置多带了 default_domain_resolver（会被旧版拒）")
-    print(f"[4] 临时测速配置版本自适应：1.12 ddr={c12['route'].get('default_domain_resolver')}，"
-          f"1.10 无 ddr={'default_domain_resolver' not in c10['route']}")
+    print(f"[4] 临时测速配置版本自适应：1.12 ddr={c12['route'].get('default_domain_resolver')}"
+          f"，DNS detour={c12['dns']['servers'][0].get('detour')}"
+          f"，1.10 无 ddr={'default_domain_resolver' not in c10['route']}")
 
     # 5. _run_probe 生成的临时测速规则必须全版本合法：只用 `inbound` 入站标签数组，
     #    不再生成 1.11+ 的 `inbound_port` / `inbound_port_range`（那俩依赖 sb_version

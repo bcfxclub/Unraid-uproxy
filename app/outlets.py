@@ -258,9 +258,13 @@ def _sb_config(cfg: st.AppCfg, version: tuple[int, int] | None = None,
         inbounds.insert(0, tun)
 
     if new_dns:
+        # 1.12 起 DNS 服务器用 type+server。关键："detour": "direct" 保证「去查 DNS
+        # 服务器」这一步永远走大陆直连，不被 global final（某节点）带走——否则大陆
+        # 机房里 DNS 解析请求会跟随 final 流进未必连通的节点，解析失败 -> 整站全超时。
+        # 这与 route.build 的 {protocol: dns -> direct} 固定规则语义一致。
         dns_block = {"servers": [
-            {"type": "udp", "tag": "ali", "server": "223.5.5.5"},
-            {"type": "udp", "tag": "dnspod", "server": "119.29.11.11"},
+            {"type": "udp", "tag": "ali", "server": "223.5.5.5", "detour": "direct"},
+            {"type": "udp", "tag": "dnspod", "server": "119.29.11.11", "detour": "direct"},
         ], "final": "ali"}
     else:
         dns_block = {"servers": [{"address": "223.5.5.5"}, {"address": "119.29.11.11"}],
