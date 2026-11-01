@@ -16,7 +16,7 @@ SAMPLES = [
     "vless://761e8be3-f4fb-4ec0-a8fe-9a7fead005bb@104.20.23.31:8443"
     "?host=fq.bcfx.dpdns.org&path=%2F%3Fed%3D2560&type=ws&encryption=none"
     "&fp=random&security=tls&alpn=default&sni=fq.bcfx.dpdns.org#fq.bcfx.dpdns.org",
-    "vmess://ewogICJ2IjogIjIiLAogICJwcyI6ICJ0ZXN0IiwKICAiYWRkIjogIjEuMi4zLjQiLAogICJwb3J0IjogIjQ0MyIsCiAgImlkIjogIjExMTExMTExLTExMTEtMTExMS0xMTExLTExMTExMTExMTExMSIsCiAgImFpZCIjICIwIiwKICAibmV0IjogIndzIiwKICAidHlwZSI6ICJub25lIiwKICAiaG9zdCI6ICJ0ZXN0LmNvbSIsCiAgInBhdGgiOiAiL3dzIiwKICAidGxzIjogInRscyIKfQ==",
+    "vmess://ewogICJ2IjogIjIiLAogICJwcyI6ICJ0ZXN0IiwKICAiYWRkIjogIjEuMi4zLjQiLAogICJwb3J0IjogIjQ0MyIsCiAgImlkIjogIjExMTExMTExLTExMTEtMTExMS0xMTExLTExMTExMTExMTExMSIsCiAgImFpZCI6ICIwIiwKICAibmV0IjogIndzIiwKICAidHlwZSI6ICJub25lIiwKICAiaG9zdCI6ICJ0ZXN0LmNvbSIsCiAgInBhdGgiOiAiL3dzIiwKICAidGxzIjogInRscyIKfQ==",
     "trojan://password123@example.com:443?sni=example.com&type=ws&path=%2Ftrojan#trojan-node",
     "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ=@1.2.3.4:8388#ss-node",
     # SNI 错位场景：机场 SNI 是 txb011.xmrhmode.com，但服务器证书只认 ws-aicdn.com。

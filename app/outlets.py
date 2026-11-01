@@ -258,13 +258,18 @@ def _sb_config(cfg: st.AppCfg, version: tuple[int, int] | None = None,
         inbounds.insert(0, tun)
 
     if new_dns:
-        # 1.12 起 DNS 服务器用 type+server。关键："detour": "direct" 保证「去查 DNS
-        # 服务器」这一步永远走大陆直连，不被 global final（某节点）带走——否则大陆
-        # 机房里 DNS 解析请求会跟随 final 流进未必连通的节点，解析失败 -> 整站全超时。
-        # 这与 route.build 的 {protocol: dns -> direct} 固定规则语义一致。
+        # 1.12 起 DNS 服务器用 type+server。
+        # 关键修复（v1.0.19）：**不要**给 UDP 直连 IP 型 DNS 加 "detour": "direct"。
+        # sing-box 1.12 会对此直接 FATAL：
+        #   start dns/udp[ali]: detour to an empty direct outbound makes no sense
+        # 即便 outbounds 里确有 {"type":"direct","tag":"direct"}，1.12 仍判定直连的
+        # direct 出站"是空的、没意义"（SagerNet/sing-box#2803，1.12 迁移已知怪癖）。
+        # 223.5.5.5 / 119.29.11.11 是裸 IP，DNS 报文不走路由、本就能直连发出，
+        # detour 多余且在 1.12 上致命。防"DNS 被送进节点"靠 route.build 里固定的
+        # {"protocol":"dns" -> direct} 规则（已在），不需要 detour 配合。
         dns_block = {"servers": [
-            {"type": "udp", "tag": "ali", "server": "223.5.5.5", "detour": "direct"},
-            {"type": "udp", "tag": "dnspod", "server": "119.29.11.11", "detour": "direct"},
+            {"type": "udp", "tag": "ali", "server": "223.5.5.5"},
+            {"type": "udp", "tag": "dnspod", "server": "119.29.11.11"},
         ], "final": "ali"}
     else:
         dns_block = {"servers": [{"address": "223.5.5.5"}, {"address": "119.29.11.11"}],
@@ -614,12 +619,13 @@ def _warp_conf(cfg: st.AppCfg, reg: dict) -> dict:
         "auto_detect_interface": True,
     }
     if new_dns:
-        # 1.12.0+ 同样要求显式默认域名解析器；DNS 服务器走 direct 出口，
-        # 避免「解析 WARP 对端域名 → 又经 warp 出口」这种自环。
+        # 1.12.0+ 同样要求显式默认域名解析器；DNS 走裸 IP 直连（不加 detour:direct，
+        # 1.12 会 FATAL "empty direct outbound"），避免「解析 WARP 对端域名 → 又经
+        # warp 出口」这种自环。
         route_block["default_domain_resolver"] = "ali"
         dns_block = {"servers": [
-            {"type": "udp", "tag": "ali", "server": "223.5.5.5", "detour": "direct"},
-            {"type": "udp", "tag": "dnspod", "server": "119.29.11.11", "detour": "direct"},
+            {"type": "udp", "tag": "ali", "server": "223.5.5.5"},
+            {"type": "udp", "tag": "dnspod", "server": "119.29.11.11"},
         ], "final": "ali"}
     else:
         dns_block = None

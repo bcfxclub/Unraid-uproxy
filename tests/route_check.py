@@ -240,8 +240,8 @@ with mock.patch.object(ol, "sb_version", lambda *a, **k: (1, 12)):
     w12 = ol._warp_conf(live, _wreg)
 ck("1.12 带 dns 块与 default_domain_resolver",
    w12.get("dns") and w12["route"].get("default_domain_resolver") == "ali", w12.get("route"))
-ck("WARP 的 DNS 服务器走 direct 出口（避免经 warp 自身解析成环）",
-   w12["dns"]["servers"][0].get("detour") == "direct", w12["dns"]["servers"][0])
+ck("WARP 的 DNS 服务器裸 IP 直连、不带 detour（1.12 合法，避免 empty direct FATAL）",
+   w12["dns"]["servers"][0].get("detour") in (None, ""), w12["dns"]["servers"][0])
 with mock.patch.object(ol, "sb_version", lambda *a, **k: (1, 10)):
     w10 = ol._warp_conf(live, _wreg)
 ck("1.10 不带 dns 块与 default_domain_resolver（保持旧版兼容）",

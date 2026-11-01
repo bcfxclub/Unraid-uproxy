@@ -90,14 +90,14 @@ def _conf(outs: list[dict], inbounds: list[dict], rules: list[dict],
     new_dns = ver >= (1, 12)
     if new_dns:
         # 1.12 起 DNS 服务器用 type+server 写法；默认域解析器指向 ali。
-        # 关键：DNS 服务器加 "detour": "direct" —— 保证「去查 DNS 服务器」这一步
-        # 永远走大陆直连（跟主配置 route.build 的 {protocol: dns -> direct} 对齐）。
-        # 不能让它跟着 final 走：一旦 final 是某个节点，DNS 解析就被送进未必连通的
-        # 那条节点，解析直接失败 -> 每个节点「经 HTTP 出目标」全超时。这是测速全
-        # 不可用的核心根因之一。
+        # 关键修复（v1.0.19）：**不要**加 "detour": "direct" —— sing-box 1.12 会
+        # FATAL "detour to an empty direct outbound makes no sense"（#2803），即便
+        # outbounds 里有 direct 出站也照样拒。223.5.5.5/119.29.11.11 是裸 IP，DNS
+        # 报文不走路由本就能直连；防「DNS 被送进节点」靠下方 safety 里的
+        # {protocol: dns -> direct} 固定规则（已含），不需要 detour 配合。
         dns_block = {"servers": [
-            {"type": "udp", "tag": "ali", "server": "223.5.5.5", "detour": "direct"},
-            {"type": "udp", "tag": "dnspod", "server": "119.29.11.11", "detour": "direct"},
+            {"type": "udp", "tag": "ali", "server": "223.5.5.5"},
+            {"type": "udp", "tag": "dnspod", "server": "119.29.11.11"},
         ], "final": "ali"}
     else:
         dns_block = {"servers": [{"address": "223.5.5.5"},
