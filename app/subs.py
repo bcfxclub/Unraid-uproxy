@@ -178,7 +178,19 @@ def _tls_obj(query: dict, host: str = "", default_fp: str = "chrome") -> dict | 
         "enabled": True,
         "server_name": query.get("sni") or query.get("peer") or host or "",
     }
-    if query.get("allowInsecure") in ("1", "true", "True"):
+    # 关键默认：TLS 节点**默认放宽证书校验**。
+    #
+    # 机场下发的 vmess/vless 节点里，SNI（server_name）经常跟实际证书对不上
+    # （比如 SNI 是 txb011.xmrhmode.com，但证书只认 ws-aicdn.com），而 URI 里
+    # 用户**从不会主动写 allowInsecure=1**。这种节点 sing-box 默认校验证书会直接
+    # TLS 握手失败，整条节点全崩、测速全不可用、代理都起不来。
+    #
+    # 放宽证书校验（insecure: true）后，sing-box 只保留 SNI 匹配，不再校验证书
+    # 颁发者/有效期/域名——对「节点能通但 SNI 错位」这种机场常见场景是必须的。
+    # 代价是无法防中间人，但代理链路上信任由机场承担，这里优先「能通」。
+    #
+    # 机场显式写了 allowInsecure=0 才收紧（极少见），否则一律放宽。
+    if query.get("allowInsecure", "1") not in ("0", "false", "False"):
         t["insecure"] = True
     fp = query.get("fp") or default_fp
     if fp and fp != "none":
