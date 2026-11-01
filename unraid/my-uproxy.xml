@@ -1,12 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Container version="2">
   <Name>uproxy</Name>
-  <!-- 存储库：完整镜像地址。默认指向 Docker Hub 公开镜像 bcfx/uproxy:latest
-       （随 GitHub tag 自动构建、匿名可拉，无需令牌，Unraid「强制更新」即可拉到新版本）。
-       备选：GHCR 镜像 ghcr.io/bcfxclub/uproxy:latest（同样自动构建，但 GHCR 包默认私有，
-       需先在 GitHub 仓库 Settings → Packages 把 bcfxclub/uproxy 设为 Public，否则拉取要令牌）。
-       注意：GHCR 包名必须全小写，仓库名 Unraid-uproxy 大写不被 GHCR 接受，故 GHCR 镜像名固定为 uproxy。 -->
-  <Repository>bcfx/uproxy:latest</Repository>
+  <!-- 存储库：完整镜像地址。默认指向 GHCR 公开镜像 ghcr.io/bcfxclub/unraid-uproxy:latest
+       （随 GitHub tag 自动构建、包已设为 Public，Unraid「强制更新」即可匿名拉到新版本，无需令牌）。
+       备选：Docker Hub 镜像 bcfx/uproxy:latest（同样自动构建并发布，作兜底来源）。
+       注意：GHCR 包名必须全小写，仓库名 Unraid-uproxy 对应包名 unraid-uproxy。 -->
+  <Repository>ghcr.io/bcfxclub/unraid-uproxy:latest</Repository>
   <Registry></Registry>
   <Network>bridge</Network>
   <Restart>unless-stopped</Restart>

@@ -20,16 +20,16 @@ Unraid 上这四个位置互相独立、写法各异、且全在内存里（重�
 
 ## 快速开始
 
-四种方式任选其一。**已发布到 Docker Hub 后最省事的是方式〇**（直接拉取，无需本地 build）；离线 / 想跟最新代码用方式一。
+四种方式任选其一。**镜像随 GitHub tag 自动发布到 GHCR 与 Docker Hub，最省事的是方式〇**（直接拉取，无需本地 build）；离线 / 想跟最新代码用方式一。
 
 ### 方式〇：从 GitHub Container Registry（GHCR）拉取（推荐，免 Docker Hub）
 
 镜像随 GitHub tag 自动发布到 **GHCR**（`.github/workflows/publish-dockerhub.yml` 里同时推 Docker Hub + GHCR）。GHCR 不需要额外配 Token——只要该仓库的包可见性设为 Public，Unraid 就能匿名拉取。
 
-**一次性前提（维护者）**：仓库 `Settings → Packages → General`，把 Package Visibility 设为 **Public**（否则匿名 pull 会 403）。包名全小写 `bcfxclub/uproxy`。
+**一次性前提（维护者）**：仓库 `Settings → Packages → General`，把 Package Visibility 设为 **Public**（否则匿名 pull 会 403）。包名全小写 `bcfxclub/unraid-uproxy`（与仓库名 Unraid-uproxy 对齐）。
 
 ```bash
-# 在 Unraid 终端（或在 Docker 页面填「存储库 bcfx/uproxy:latest」+ WebUI http://[IP]:[PORT:8765]/ 手工创建）
+# 在 Unraid 终端（或在 Docker 页面填「存储库 ghcr.io/bcfxclub/unraid-uproxy:latest」+ WebUI http://[IP]:[PORT:8765]/ 手工创建）
 mkdir -p /mnt/user/appdata/uproxy/state
 docker run -d --name uproxy --restart unless-stopped \
   -p 8765:8765 \
@@ -42,19 +42,19 @@ docker run -d --name uproxy --restart unless-stopped \
   -v /etc:/host/etc \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /mnt/user/appdata/uproxy/state:/config \
-  bcfx/uproxy:latest
+  ghcr.io/bcfxclub/unraid-uproxy:latest
 ```
 
 > `/etc:/host/etc` 用于写 `/etc/wgetrc`，让 Unraid **装插件 / 下载 txz** 也走代理（CA 商店的 `proxy.cfg` 管不到插件安装）。不需要这项功能可以不挂。
 
-> 更新只需 `docker pull bcfx/uproxy:latest` 重建容器（配置全在 `state` 卷，不丢）。
-> Docker Hub 镜像 `bcfx/uproxy:latest` 匿名可拉，无需令牌，推荐作为默认来源。
-> 备选：GHCR 镜像 `ghcr.io/bcfxclub/uproxy:latest`（同样自动构建，但需先在 GitHub 把包设为 Public 才能匿名拉）。
+> 更新只需 `docker pull ghcr.io/bcfxclub/unraid-uproxy:latest` 重建容器（配置全在 `state` 卷，不丢）。
+> **默认来源是 GHCR 镜像 `ghcr.io/bcfxclub/unraid-uproxy:latest`**：随仓库 tag 自动构建，包已设为 Public，匿名可拉，无需令牌。
+> 备选：Docker Hub 镜像 `bcfx/uproxy:latest`（同样自动构建并发布，作兜底来源）。
 
-### 方式〇'：从 Docker Hub 拉取（默认推荐）
+### 方式〇'：从 Docker Hub 拉取（兜底来源）
 
 ```bash
-# 同上，把最后一行的 ghcr.io/bcfxclub/uproxy:latest 换成 bcfx/uproxy:latest
+# 兜底：把最后一行的 ghcr.io/bcfxclub/unraid-uproxy:latest 换成 bcfx/uproxy:latest
 docker pull bcfx/uproxy:latest
 ```
 
@@ -81,7 +81,7 @@ docker compose up -d --build
 
 把 `unraid/my-uproxy.xml` 拷到 `/boot/config/plugins/dockerMan/templates-user/`，
 再到 Unraid WebUI 的 Docker 页 → Add Container → 模板选 `uproxy`。
-模板默认指向 Docker Hub 的 `bcfx/uproxy:latest`（方式〇），拉取即用；
+模板默认指向 GHCR 的 `ghcr.io/bcfxclub/unraid-uproxy:latest`（方式〇），拉取即用；
 若要本地 build 版本，把模板「存储库」改成 `uproxy:latest` 再 `docker build -t uproxy:latest .`。
 
 ### 访问账号
@@ -232,7 +232,7 @@ cd repo && ./update.sh
 - **密码不对 / 登不进**：若从没在界面改过密码，重部署后密码以 `install.sh` 打印的为准（已被备份到 `state/.deploy_pw`）；若改过界面密码则永远以 `auth.json` 为准。忘记可删 `state/auth.json` 并重启容器回退到环境变量密码。
 
 - **sing-box / WARP 启动不了**：出口现在在容器内以**进程**方式运行（不再依赖宿主 docker 编排子容器）。报「未找到 sing-box 二进制」说明镜像版本旧，重新拉最新镜像即可：
-  `docker pull bcfx/uproxy:latest`（Docker Hub，推荐，匿名可拉）。GHCR 源需先把包设为 Public：`docker pull ghcr.io/bcfxclub/uproxy:latest`。
+  `docker pull ghcr.io/bcfxclub/unraid-uproxy:latest`（GHCR，默认，已 Public，匿名可拉）。Docker Hub 兜底：`docker pull bcfx/uproxy:latest`。
   WARP 若提示「端口未就绪 / 需要 NET_ADMIN」，确认容器有 `NET_ADMIN` 能力且宿主机已加载 wireguard 内核模块（Unraid 6.10+ 自带）。
 
 - **Unraid 7.0+：用官方「出站代理管理器」接管（推荐）**：uproxy 启动 sing-box / WARP 后，
@@ -256,7 +256,7 @@ cd repo && ./update.sh
 
 ### 五、发布到 Docker Hub（维护者）
 
-发布后，Unraid 用户无需本地 build，直接 `docker pull bcfx/uproxy` 即可。
+发布后，Unraid 用户无需本地 build，默认从 GHCR `docker pull ghcr.io/bcfxclub/unraid-uproxy:latest`（已 Public，无需令牌）；Docker Hub `docker pull bcfx/uproxy:latest` 作兜底。
 
 **一次性准备（Docker Hub 侧）**
 1. 注册/登录 [Docker Hub](https://hub.docker.com)，确认你的命名空间（如 `bcfxclub`）。
@@ -269,12 +269,12 @@ cd repo && ./update.sh
    - `DOCKERHUB_TOKEN` = 上一步生成的 Access Token
 
 **每次发布（推荐：打 tag 自动构建推送）**
-仓库已带 `.github/workflows/publish-dockerhub.yml`，**推送 `v*` tag 时**自动构建 `latest` 与版本号两个镜像并推送到 Docker Hub：
+仓库已带 `.github/workflows/publish-dockerhub.yml`，**推送 `v*` tag 时**自动构建并同时推送到 **GHCR**（`ghcr.io/bcfxclub/unraid-uproxy`，无需 Secret）与 **Docker Hub**（`bcfx/uproxy`，需上面两个 Secret）两份镜像：
 ```bash
 git tag v1.0.0
 git push origin v1.0.0     # GitHub Actions 自动构建并推送
 ```
-在仓库 Actions 页可看构建日志；成功后 `docker pull bcfx/uproxy:latest` 即最新。
+在仓库 Actions 页可看构建日志；成功后 `docker pull ghcr.io/bcfxclub/unraid-uproxy:latest` 即最新（Docker Hub 同名 latest 同步更新）。
 
 **不依赖 CI 的手动发布（在任意能连 Docker 的机器上）**
 ```bash
@@ -288,7 +288,7 @@ docker push bcfx/uproxy:latest
 docker push bcfx/uproxy:1.0.0
 ```
 
-> 说明：`.dockerignore` 已把 `.git`、测试、文档、本地脚本与状态目录排除，构建上下文只有 `app/ web/ Dockerfile requirements.txt`，镜像保持精简。发布公共镜像后，`unraid/my-uproxy.xml` 与 README「方式〇」即指向 `bcfx/uproxy:latest`，用户可直接拉取。
+> 说明：`.dockerignore` 已把 `.git`、测试、文档、本地脚本与状态目录排除，构建上下文只有 `app/ web/ Dockerfile requirements.txt`，镜像保持精简。发布公共镜像后，`unraid/my-uproxy.xml` 与 README「方式〇」即指向 `ghcr.io/bcfxclub/unraid-uproxy:latest`（GHCR 默认，Docker Hub `bcfx/uproxy:latest` 作兜底），用户可直接拉取。
 
 ## 界面
 

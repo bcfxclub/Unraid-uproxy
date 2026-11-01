@@ -47,8 +47,8 @@ jobs:
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/uproxy:latest,${{ secrets.DOCKERHUB_USERNAME }}/uproxy:${{ steps.version.outputs.version }}
 
   # ============================================================
-  # 推送到 GHCR（ghcr.io/bcfxclub/uproxy），无需任何 Secret
-  # 包名固定全小写 uproxy（GHCR 不接受大写仓库名）
+  # 推送到 GHCR（ghcr.io/bcfxclub/unraid-uproxy），无需任何 Secret
+  # 包名与 GitHub 仓库名 Unraid-uproxy 对齐（全小写 unraid-uproxy）
   # 首次推送前：仓库 Settings → Packages → General → 设 Public
   # ============================================================
   publish-ghcr:
@@ -80,4 +80,4 @@ jobs:
           context: .
           push: true
           # 写死 owner bcfxclub（GitHub 表达式里不支持 shell 管道 | lower）
-          tags: ghcr.io/bcfxclub/uproxy:latest,ghcr.io/bcfxclub/uproxy:${{ steps.version.outputs.version }}
+          tags: ghcr.io/bcfxclub/unraid-uproxy:latest,ghcr.io/bcfxclub/unraid-uproxy:${{ steps.version.outputs.version }}
