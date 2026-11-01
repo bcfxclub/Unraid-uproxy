@@ -31,21 +31,23 @@ Unraid 上这四个位置互相独立、写法各异、且全在内存里（重�
 ```bash
 # 在 Unraid 终端（或在 Docker 页面填「存储库 ghcr.io/bcfxclub/unraid-uproxy:latest」+ WebUI http://[IP]:[PORT:8765]/ 手工创建）
 mkdir -p /mnt/user/appdata/uproxy/state
-docker run -d --name uproxy --restart unless-stopped \
-  -p 8765:8765 \
-  -e TZ=Asia/Shanghai -e UPX_USER=admin -e UPX_PASSWORD=换成你的密码 \
+docker run -d --name Unraid-uproxy --restart unless-stopped \
+  -p 8765:8765 -p 7890:7890 -p 9091:9091 \
+  --cap-add NET_ADMIN --device /dev/net/tun:/dev/net/tun \
+  -e TZ=Asia/Shanghai -e UPX_USER=admin -e UPX_PASSWORD=换成你的密码 -e UPX_SESSION_TTL=604800 \
   -e UPX_HOST_ROOT=/host -e UPX_STATE_DIR=/config \
-  -v /boot:/host/boot \
+  -v /boot/config:/host/boot/config \
   -v /etc/docker:/host/etc/docker \
   -v /usr/local/etc/rc.d:/host/usr/local/etc/rc.d \
   -v /etc/profile.d:/host/etc/profile.d \
-  -v /etc:/host/etc \
-  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /etc/wgetrc:/host/etc/wgetrc \
+  -v /etc/unraid-version:/host/etc/unraid-version:ro \
+  -v /etc/os-release:/host/etc/os-release:ro \
   -v /mnt/user/appdata/uproxy/state:/config \
   ghcr.io/bcfxclub/unraid-uproxy:latest
 ```
 
-> `/etc:/host/etc` 用于写 `/etc/wgetrc`，让 Unraid **装插件 / 下载 txz** 也走代理（CA 商店的 `proxy.cfg` 管不到插件安装）。不需要这项功能可以不挂。
+> `/etc/wgetrc` 用于写 wget 代理，让 Unraid **装插件 / 下载 txz** 也走代理（CA 商店的 `proxy.cfg` 管不到插件安装）。版本文件（`unraid-version`、`os-release`）只读挂载，仅用于探测 Unraid 版本；不需要写 wgetrc 功能可去掉该挂载，但不影响核心代理。
 
 > 更新只需 `docker pull ghcr.io/bcfxclub/unraid-uproxy:latest` 重建容器（配置全在 `state` 卷，不丢）。
 > **默认来源是 GHCR 镜像 `ghcr.io/bcfxclub/unraid-uproxy:latest`**：随仓库 tag 自动构建，包已设为 Public，匿名可拉，无需令牌。
@@ -178,23 +180,25 @@ docker build -t uproxy:latest "$SRC/build"
 
 # 6. 启动容器（等价于 install.sh 的 docker run）
 PW="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 24)"   # 自己设个固定密码更省心
-docker rm -f uproxy >/dev/null 2>&1 || true
-docker run -d --name uproxy --restart unless-stopped \
-  -p 8765:8765 \
+docker rm -f Unraid-uproxy >/dev/null 2>&1 || true
+docker run -d --name Unraid-uproxy --restart unless-stopped \
+  -p 8765:8765 -p 7890:7890 -p 9091:9091 \
+  --cap-add NET_ADMIN --device /dev/net/tun:/dev/net/tun \
   -e "UPX_HOST_ROOT=/host" -e "UPX_STATE_DIR=/config" -e "TZ=Asia/Shanghai" \
-  -e "UPX_USER=admin" -e "UPX_PASSWORD=$PW" -e "UPX_TOKEN=$PW" \
-  -v /boot:/host/boot \
+  -e "UPX_USER=admin" -e "UPX_PASSWORD=$PW" -e "UPX_SESSION_TTL=604800" \
+  -v /boot/config:/host/boot/config \
   -v /etc/docker:/host/etc/docker \
   -v /usr/local/etc/rc.d:/host/usr/local/etc/rc.d \
   -v /etc/profile.d:/host/etc/profile.d \
-  -v /etc:/host/etc \
-  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /etc/wgetrc:/host/etc/wgetrc \
+  -v /etc/unraid-version:/host/etc/unraid-version:ro \
+  -v /etc/os-release:/host/etc/os-release:ro \
   -v "$STATE:/config" \
-  uproxy:latest
+  ghcr.io/bcfxclub/unraid-uproxy:latest
 echo "登录密码：$PW   访问 http://<Unraid-IP>:8765/"
 ```
 
-> 关键点：`/config` 必须挂到阵列/缓存（即 `/mnt/user/appdata/uproxy/state`），否则重启后配置与备份全丢。挂载宿主机的四个目录（`/boot`、`/etc/docker`、`rc.d`、`profile.d`）是工具改写代理配置的前提，缺一个功能就会受限。
+> 关键点：`/config` 必须挂到阵列/缓存（即 `/mnt/user/appdata/uproxy/state`），否则重启后配置与备份全丢。挂载宿主机的 `/boot/config` 子目录（开机脚本/CA 商店配置）与 `/etc` 下具体文件（`wgetrc` 可写、版本文件只读）是工具改写代理配置的前提；默认不再挂 `docker.sock`、不再挂整块 `/boot` 或整目录 `/etc`，已大幅收窄权限。
 
 ### 二、更新 / 重部署
 

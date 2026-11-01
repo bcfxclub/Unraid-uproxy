@@ -1,8 +1,8 @@
 services:
-  uproxy:
+  unraid-uproxy:
     build: .
-    image: uproxy:latest
-    container_name: uproxy
+    image: ghcr.io/bcfxclub/unraid-uproxy:latest
+    container_name: Unraid-uproxy
     restart: unless-stopped
     ports:
       # Web 管理界面
@@ -15,22 +15,25 @@ services:
       UPX_HOST_ROOT: /host
       UPX_STATE_DIR: /config
       TZ: Asia/Shanghai
+      UPX_USER: admin
+      UPX_PASSWORD: 请设置一个强密码
+      UPX_SESSION_TTL: 604800
     cap_add:
       - NET_ADMIN          # TUN 透明代理 / WARP 建 wireguard 接口需要
     devices:
       - /dev/net/tun:/dev/net/tun
     volumes:
-      # 持久化：U 盘配置（开机脚本 go / CA 商店配置）
-      - /boot:/host/boot
-      # Docker 守护进程配置
+      # 持久化：仅 U 盘配置子目录（开机脚本 go / CA 商店配置）
+      - /boot/config:/host/boot/config
+      # Docker 守护进程配置（6.x 下发 daemon.json 用）
       - /etc/docker:/host/etc/docker
       # rc.docker 启动脚本（dockerd 代理注入点）
       - /usr/local/etc/rc.d:/host/usr/local/etc/rc.d
       # 系统级代理环境变量
       - /etc/profile.d:/host/etc/profile.d
-      # 用于 6.x 手动下发：写 /etc/wgetrc 等（OPM 7.0+ 不需要）
-      - /etc:/host/etc
-      # 编排 WARP / sing-box 出口进程（仅 6.x 重启 dockerd 用到，出口本身不再依赖）
-      - /var/run/docker.sock:/var/run/docker.sock
+      # 6.x 手动下发：写 /etc/wgetrc（可写）；版本探测只读
+      - /etc/wgetrc:/host/etc/wgetrc
+      - /etc/unraid-version:/host/etc/unraid-version:ro
+      - /etc/os-release:/host/etc/os-release:ro
       # 本工具自身状态与备份
-      - /mnt/user/appdata/uproxy:/config
+      - /mnt/user/appdata/uproxy/state:/config

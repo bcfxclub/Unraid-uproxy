@@ -91,9 +91,9 @@ if [ -x "$RUN_TPL" ] && [ -f "$TPL/my-uproxy.xml" ]; then
 fi
 if [ "$OK" != "1" ]; then
   echo "    未检测到 Unraid 模板引擎或模板创建失败，退回直接 docker run"
-  docker rm -f uproxy >/dev/null 2>&1 || true
+  docker rm -f Unraid-uproxy >/dev/null 2>&1 || true
   docker run -d \
-    --name uproxy \
+    --name Unraid-uproxy \
     --restart unless-stopped \
     -p "${PORT}:8765" \
     -p 7890:7890 \
@@ -105,15 +105,16 @@ if [ "$OK" != "1" ]; then
     -e "TZ=Asia/Shanghai" \
     -e "UPX_USER=admin" \
     -e "UPX_PASSWORD=${UPX_PASSWORD}" \
-    -e "UPX_TOKEN=${UPX_TOKEN}" \
-    -v /boot:/host/boot \
+    -e "UPX_SESSION_TTL=604800" \
+    -v /boot/config:/host/boot/config \
     -v /etc/docker:/host/etc/docker \
     -v /usr/local/etc/rc.d:/host/usr/local/etc/rc.d \
     -v /etc/profile.d:/host/etc/profile.d \
-    -v /etc:/host/etc \
-    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v /etc/wgetrc:/host/etc/wgetrc \
+    -v /etc/unraid-version:/host/etc/unraid-version:ro \
+    -v /etc/os-release:/host/etc/os-release:ro \
     -v "${STATE}:/config" \
-    uproxy:latest
+    ghcr.io/bcfxclub/unraid-uproxy:latest
 fi
 
 echo
