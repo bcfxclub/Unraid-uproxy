@@ -99,6 +99,11 @@ def _conf(outs: list[dict], inbounds: list[dict], rules: list[dict],
                                  {"address": "119.29.11.11"}],
                      "final": "223.5.5.5"}
     route_block: dict = {"rules": rules, "final": "direct"}
+    # 关键：临时实例也要和主配置一样开 auto_detect_interface。否则容器里 direct
+    # 出站（节点 detour / final）会选错出口网卡，表现为「TCP 握手能通、但经节点
+    # 的 HTTP 实测全部超时」——这正是用户报的 bug。主配置 route.build 一直开着，
+    # 临时配置漏了，这里补齐。
+    route_block["auto_detect_interface"] = True
     if new_dns:
         route_block["default_domain_resolver"] = "ali"
     return {

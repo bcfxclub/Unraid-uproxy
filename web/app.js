@@ -2620,6 +2620,10 @@ async function boot() {
   }
   await loadState().catch((e) => toast(`初始化失败：${e.message}`));
   autoTcpProbe();
+  // 刷新保险：进页面后几秒内多刷几次仪表板，确保异步测速（TCP/HTTP）一旦到位就显示，
+  // 不依赖单次回调——旧版本因回调没触发，卡片会一直停在「点测速 / 正在测速」。
+  [800, 2500, 5000, 8000, 12000].forEach((t) =>
+    setTimeout(() => { try { Dash.onNodes(); } catch (e) { /* Dash 未就绪时忽略 */ } }, t));
   loadBackups().catch(() => {});
   Traffic.start();
   startHealthLoop();        // 打开即自动体检，间隔取记住的设置（默认 30s）
