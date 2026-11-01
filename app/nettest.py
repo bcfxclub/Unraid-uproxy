@@ -196,7 +196,11 @@ def _run_probe(nodes: list[dict], url: str, timeout_ms: int) -> dict:
         return {"tag": name, **_probe_one(url, port, secs)}
 
     try:
-        with ThreadPoolExecutor(max_workers=min(10, len(pairs))) as ex:
+        # 并发从 10 降到 6：节点多时（60+）每轮 HTTP 实测不再 65×满超时 拖得
+        # 整轮锁被占住（"上一次还在进行"体感卡住）。6 并发下最坏 65 节点约
+        # 65/6×secs ≈ 11 轮，比 10 并发的 7 轮长但单次 curl 超时已缩到 3s，
+        # 总时长相近且锁占用更可预期；同时 TCP 降级路径不受影响。
+        with ThreadPoolExecutor(max_workers=min(6, len(pairs))) as ex:
             res = list(ex.map(one, pairs))
     finally:
         outlets.stop_temp("sbtest")
@@ -205,7 +209,11 @@ def _run_probe(nodes: list[dict], url: str, timeout_ms: int) -> dict:
 
 
 def _probe_one(url: str, port: int, timeout: int) -> dict:
-    r = host.curl(url, proxy=f"http://127.0.0.1:{port}", timeout=timeout)
+    # 单次探测超时上限 3s：HK 这类 SNI 错位 / 连不通的坏节点，让 curl 卡满 5s
+    # 会让整轮 65 节点锁被占 300s+，用户连点两次测速第二次就被"上一次还在进行"
+    # 卡住。压到 3s 后坏节点最快 3s 就返回失败，好节点（102ms 级）不受影响。
+    cap = min(timeout, 3)
+    r = host.curl(url, proxy=f"http://127.0.0.1:{port}", timeout=cap)
     code = r["code"]
     ok = code[:1] in ("2", "3")
     out = {"ms": r["ms"], "reachable": ok, "mode": "http", "url": url, "code": code}

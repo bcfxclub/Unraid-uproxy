@@ -249,6 +249,7 @@ def _vmess(rest: str, name: str) -> dict | None:
     if not d.get("add") or not port:
         return None
     tag = d.get("ps") or name or f"{d.get('add')}:{port}"
+
     ob: dict = {
         "type": "vmess",
         "tag": tag,
