@@ -301,6 +301,39 @@ def _sb_config(cfg: st.AppCfg, version: tuple[int, int] | None = None,
         # 指向 dns 块里名为 ali 的服务器（见 dns_block 的 final）。
         route_block = dict(route_block, default_domain_resolver="ali")
 
+    # 自保护：TUN 模式下，Unraid 宿主机自身的出网（Unraid 商店 / CA / 插件 /
+    # docker 拉镜像 / GitHub / pypi 等）绝不能被打进代理节点。否则一旦默认节点
+    # 连不上（比如 HK 011 那种 SNI 错位），Unraid 自身拉镜像、装插件全部失败，
+    # 表现为「出口启停失败、拉不到任何东西」。这些目标走 direct 直连。
+    #
+    # 不影响用户「把系统代理指 7890」的用法：mixed 入站不走 TUN，浏览器 / 手
+    # 机 / 客户端指 7890 时流量仍正常走节点，这里只管 TUN 接管到的宿主机自身流量。
+    self_protect_rules = []
+    if cfg.outlet.sb_tun:
+        # 1) 私有网段（已含 172.16/12、10/8、192.168/16）——route.build 已有，这里
+        #    不重复（避免 1.12 上重复 rule 被拒），只补 host IP 网段兜底。
+        # 2) 明确列出的出网目标直连：让 Unraid 系统、商店、docker、GitHub 不绕节点。
+        #    这些都是「Unraid 自身要出网」而不是「用户想翻墙」的流量，直连是刚需。
+        self_protect_rules = [
+            {"outbound": "direct", "domain": [
+                # Unraid 商店 / CA / 插件 / 论坛
+                "ca.unraid.net", "forum.unraid.net", "unraid.net",
+                # Docker 拉镜像（用户拉别的代理容器用）
+                "registry-1.docker.io", "docker.io", "registry.hub.docker.com",
+                # GHCR（本仓库 & 其它 GHCR 镜像）
+                "ghcr.io",
+                # GitHub（模板 / 依赖 / 插件）
+                "github.com", "raw.githubusercontent.com", "objects.githubusercontent.com",
+                # PyPI / npm（装依赖）
+                "pypi.org", "files.pythonhosted.org", "registry.npmjs.org",
+                # 系统更新 / 基础服务
+                "ntp.org",
+            ]},
+        ]
+        # 插到规则表最前（命中即停），优先级高于用户自定义规则。
+        existing_rules = route_block.get("rules", [])
+        route_block["rules"] = self_protect_rules + existing_rules
+
     conf: dict = {
         "log": {"level": "warn"},
         # Clash API：WebUI 用它拉实时连接数（统计面板的 /connections）。
@@ -341,6 +374,41 @@ def sb_check(cfg: st.AppCfg, conf: dict | None = None) -> dict:
     return {"ok": r["rc"] == 0, "message": msg[:800]}
 
 
+def _sb_start_wait_port(cfg, deadline: float) -> bool:
+    """等待 7890 端口就绪，TUN 模式下放宽超时。
+
+    关键修复：TUN 模式下，容器自身（拉 docker 镜像 / Unraid 商店 / 装插件）
+    流量全被 TUN 接管，一启动就被打进当前选中的节点。如果该节点是 SNI 错位
+    / 连不上的坏节点（如 HK 011），日志里会先刷出 TLS/certificate 错误，
+    而 7890 要等 TUN 网卡建好 + 路由配完才 listen。固定 15s 会误判"启动失败"。
+    这里 TUN 模式把等待时间翻倍（最长 60s），给网卡 + 首包留出时间。
+    """
+    base_deadline = time.time() + 15
+    deadline = max(deadline, base_deadline)
+    if cfg.outlet.sb_tun:
+        deadline = max(deadline, time.time() + 45)
+    return _wait_port(cfg.outlet.sb_port, deadline)
+
+
+def _classify_startup_log(log: str) -> str:
+    """把「某节点连接 TLS 失败」和「进程真没起来」区分开，给用户可操作的提示。
+
+    如果日志里只有节点级错误（tls/certificate/x509/connection: open connection
+    ...）而没有进程级 FATAL（fatal/panic/sing-box: /config），说明 sing-box
+    **已经起来在接流量了**，只是某条节点连不通——不是「启动失败」。把这条
+    区别写清楚，免得用户误以为代码坏了。
+    """
+    text = (log or "").strip()
+    if not text:
+        return ""
+    has_fatal = re.search(r"(?i)(^|\s)(FATAL|panic|sing-box:\s*config|failed to listen|bind:)", text)
+    has_conn = re.search(r"(?i)(tls: failed|certificate|x509|open connection to|connection: open)", text)
+    if has_conn and not has_fatal:
+        return ("（sing-box 进程已启动在接流量，错误是某条节点连接握手失败——"
+                "把该节点停用、换一个能用的节点即可，不是启动器的问题）")
+    return ""
+
+
 def sb_start(cfg: st.AppCfg) -> dict:
     ok, binp = _sb_ok()
     if not ok:
@@ -360,10 +428,17 @@ def sb_start(cfg: st.AppCfg) -> dict:
 
     path = _stage_conf(conf, "config.json")
     _spawn(binp, path, _pid_path("sb"), kind="sb")
-    if not _wait_port(cfg.outlet.sb_port, time.time() + 15):
+    if not _sb_start_wait_port(cfg, time.time()):
         err = _tail_log("sb")
+        note = _classify_startup_log(err)
         _kill(_pid_path("sb"))
-        return {"ok": False, "message": "sing-box 启动后未能监听端口：" + (err[:300] or "未知原因")}
+        # 如果日志里只是节点级连接失败（TLS/cert），说明 sing-box 其实已起来，
+        # 给用户可操作的建议而不是"启动失败"这种误导。
+        msg = "sing-box 启动后未能监听端口：" + (err[:300] or "未知原因")
+        if note:
+            msg += note
+        return {"ok": False, "message": msg,
+                "hint": "节点级连接失败" if note else ""}
 
     tun_note = "（已启用 TUN 透明代理，需要容器有 NET_ADMIN 权限并挂载 /dev/net/tun）" if cfg.outlet.sb_tun else ""
     return {
