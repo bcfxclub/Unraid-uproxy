@@ -73,7 +73,11 @@ r = route.effective(cfg)
 ck("老配置被铺成 3 条（直连 + 内置清单 + 自定义代理）", len(r) == 3, [x["action"] for x in r])
 ck("直连在前，且 .cn 规范成 cn", r[0]["action"] == "direct" and r[0]["values"] == ["cn"], r[0])
 ck("内置清单也进来了", len(r[1]["values"]) > 10 and "github.com" in r[1]["values"])
-ck("兜底是直连", route.final_action(cfg) == "direct")
+ck("兜底走代理（默认全局模式，未命中规则也出网）", route.final_action(cfg) == "proxy")
+
+cfg_direct = fresh()
+cfg_direct.outlet.sb_final = "direct"
+ck("显式选大陆白名单：兜底是直连", route.final_action(cfg_direct) == "direct")
 
 cfg2 = fresh()
 cfg2.outlet.sb_route = "all"

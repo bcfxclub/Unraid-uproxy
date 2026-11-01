@@ -66,7 +66,12 @@ class OutletCfg(BaseModel):
 
     # 分流规则表（可编辑、有序、命中即停）：{id,enabled,match,values,action,note}
     sb_rules: list[dict[str, Any]] = Field(default_factory=list)
-    sb_final: str = "direct"      # 全部规则都没命中时的兜底：direct / proxy
+    # 全部规则都没命中时的兜底：direct / proxy。
+    # 默认 proxy（全局代理）：把浏览器 / 系统代理指向 7890 就能正常上外网；
+    # 局域网 / 私有网段仍由 route.build 的固定规则强制直连，不受影响。
+    # 这是「未命中兜底」的唯一真相来源，与是否写了自定义规则无关，
+    # 否则「全局代理模式 / 大陆白名单模式」开关对没写规则的用户会失效。
+    sb_final: str = "proxy"
 
     sb_tun: bool = False        # TUN 透明代理（需 NET_ADMIN，影响整台主机出网，默认关）
     sb_auto_update: int = 0     # 订阅自动更新间隔（分钟），0=关闭
@@ -129,6 +134,14 @@ def _migrate(cfg: AppCfg) -> None:
             "updated_at": "",
             "count": len(cfg.outlet.sb_nodes),
         }]
+    # 旧版默认 sb_final="direct" 是个缺陷：默认只把开发源（docker/github/AI）走代理，
+    # 普通上网（Google/YouTube 等）全部直连——在大陆等于上不了网，用户体感「代理不工作」。
+    # 这里对「从没自定义过路由」的旧配置纠正为全局代理；局域网/私有网段仍由 route.build
+    # 固定规则强制直连，不受影响。用户主动切过「大陆白名单模式」的（sb_route=="rules"）不动。
+    if (not cfg.outlet.sb_rules
+            and (cfg.outlet.sb_route or "auto") == "auto"
+            and (cfg.outlet.sb_final or "direct") == "direct"):
+        cfg.outlet.sb_final = "proxy"
 
 
 def save(cfg: AppCfg) -> None:

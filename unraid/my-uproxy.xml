@@ -13,8 +13,8 @@
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
   <Support/>
-  <Overview>Unraid 出网加速编排工具。sing-box / WARP 在本容器内作为进程直接运行，监听代理端口（7890=sing-box，9091=WARP），
-并把端口发布到宿主。Unraid 7.0+ 推荐：设置 → 出站代理管理器，把代理地址填成 http://[IP]:7890（或 9091）即可让系统出网走代理；
+  <Overview>Unraid 出网加速编排工具。sing-box / WARP 在本容器内作为进程直接运行，监听代理端口（7890=sing-box，9091=WARP，均为 mixed=HTTP+SOCKS 共用端口），
+并把端口发布到宿主。7890 端口既可被 Unraid 7.0+ 的「出站代理管理器」接管（设置 → 出站代理 → 填 http://[IP]:7890 让系统出网走代理），也可直接当作个人上网代理：把浏览器 / 手机 / 系统代理指向 http://[IP]:7890 即可上外网（默认全局代理，局域网仍直连）。
 6.x 系统可继续用本工具的「下发」把代理写入 dockerd / CA 商店 / wgetrc。自带备份、开机重放与一键还原。</Overview>
   <Category>Tools:</Category>
   <WebUI>http://[IP]:[PORT:8765]/</WebUI>

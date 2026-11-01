@@ -294,9 +294,13 @@ def effective(cfg: st.AppCfg) -> list[dict]:
 
 
 def final_action(cfg: st.AppCfg) -> str:
-    if cfg.outlet.sb_rules:
-        return cfg.outlet.sb_final if cfg.outlet.sb_final in ("direct", "proxy") else "direct"
-    return "proxy" if (cfg.outlet.sb_route or "").lower() == "all" else "direct"
+    """未命中任何规则时的兜底动作，是「全局代理模式 / 大陆白名单模式」开关的唯一真相来源。
+
+    历史上这里只在 ``sb_rules`` 非空时才读 ``sb_final``，导致没写自定义规则的用户
+    点开「全局代理模式」开关却依然直连——开关形同虚设。现在无论是否写过规则，
+    一律以 ``sb_final`` 为准（写错才回退到 proxy），开关始终生效。
+    """
+    return cfg.outlet.sb_final if cfg.outlet.sb_final in ("direct", "proxy") else "proxy"
 
 
 # --------------------------------------------------------------------------

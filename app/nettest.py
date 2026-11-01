@@ -98,7 +98,14 @@ def _conf(outs: list[dict], inbounds: list[dict], rules: list[dict],
         dns_block = {"servers": [{"address": "223.5.5.5"},
                                  {"address": "119.29.11.11"}],
                      "final": "223.5.5.5"}
-    route_block: dict = {"rules": rules, "final": "direct"}
+    # 与主配置 route.build 对齐：这两条固定规则保证 DNS 解析、私有/局域网网段永远
+    # 走直连，绝不绕进节点。否则临时实例里 DNS 查询可能跟着 final 走（被送进节点）
+    # 或选错网卡，表现为「经节点的 HTTP 实测全部超时 / DNS 解析失败」。
+    safety = [
+        {"outbound": "direct", "protocol": "dns"},
+        {"outbound": "direct", "ip_is_private": True},
+    ]
+    route_block: dict = {"rules": safety + list(rules), "final": "direct"}
     # 关键：临时实例也要和主配置一样开 auto_detect_interface。否则容器里 direct
     # 出站（节点 detour / final）会选错出口网卡，表现为「TCP 握手能通、但经节点
     # 的 HTTP 实测全部超时」——这正是用户报的 bug。主配置 route.build 一直开着，
@@ -149,6 +156,20 @@ def _run_probe(nodes: list[dict], url: str, timeout_ms: int) -> dict:
 
     if not pairs:
         return {"results": bad, "note": ""}
+
+    # sing-box 1.11 起废弃、1.12 起**删除**了 route 规则里的 `inbound` 字段，
+    # 改用 `inbound_port` / `inbound_port_range`。当前镜像锁 1.12.7，如果用旧字段，
+    # 「按端口把探测流量分给各节点」的规则会被整个忽略，所有流量掉到 final:direct
+    # （大陆直连不通），表现就是「每个节点 HTTP 实测全超时」——正是用户报的现象。
+    # 这里按版本分支：1.11+ 用 inbound_port，1.10 及更早用 inbound。
+    ver = outlets.sb_version()
+    use_port = ver >= (1, 11)
+    for p in pairs:
+        port, _tag, _name = p
+        if use_port:
+            rules.append({"inbound_port": port, "outbound": _tag})
+        else:
+            rules.append({"inbound": [f"probe-{pairs.index(p)}"], "outbound": _tag})
 
     ok, binp = outlets._sb_ok()
     if not ok:
