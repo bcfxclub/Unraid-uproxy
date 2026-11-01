@@ -147,6 +147,27 @@ def main() -> int:
     print(f"[4] 临时测速配置版本自适应：1.12 ddr={c12['route'].get('default_domain_resolver')}，"
           f"1.10 无 ddr={'default_domain_resolver' not in c10['route']}")
 
+    # 5. _run_probe 生成的临时测速规则必须对 1.12 干净（不能再带已删除的 inbound 字段），
+    #    否则 1.12.7 上 sing-box check 直接拒绝 -> 全部节点测不出延迟（用户报的真 bug）。
+    captured = {}
+    nettest.outlets.sb_version = lambda *a, **k: (1, 12)
+    nettest.outlets._sb_ok = lambda: (True, "/fake/sing-box")
+    nettest.outlets.temp_run = lambda conf, *a, **k: (captured.update(conf=conf) or {"ok": True})
+    nettest.outlets.stop_temp = lambda *a, **k: None
+    nettest.test_nodes(NODES, mode="http", url="http://probe.local/204")
+    conf = captured.get("conf")
+    bad_rule = False
+    if conf:
+        for ru in conf.get("route", {}).get("rules", []):
+            if "inbound" in ru and not any(k.startswith("inbound_port") for k in ru):
+                bad_rule = True
+    if bad_rule or not conf:
+        fails.append("1.12 临时测速规则仍残留已删除的 inbound 字段（会导致测速降级）")
+    else:
+        ports = [ru for ru in conf["route"]["rules"] if "inbound_port" in ru]
+        print(f"[5] _run_probe 1.12 规则干净：共 {len(conf['route']['rules'])} 条规则，"
+              f"inbound_port 规则 {len(ports)} 条，无残留 inbound 字段")
+
     if fails:
         print("\n失败：")
         for f in fails:

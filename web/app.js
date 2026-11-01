@@ -1358,7 +1358,7 @@ function delayText(r) {
 
 function delayTitle(r) {
   if (!r) return "";
-  if (r.degraded) return "当前环境没有 Docker，无法做 HTTP 实测（已降级为 TCP 握手）；部署到 Unraid 后才会显示真实出网延迟。";
+  if (r.degraded) return r.note || "HTTP 实测当前不可用（环境不支持，已降级为 TCP 握手）。";
   const head = r.mode === "http"
     ? `经该节点访问 ${r.url || "测试地址"}${r.code ? `（HTTP ${r.code}）` : ""} 的实际耗时`
     : "TCP 握手耗时（只连节点端口，不代表能出网）";
@@ -1515,7 +1515,7 @@ async function runNodeTest(names, mode, url, opts) {
   if (mode === "http" && d.mode !== "http") {
     const tset = new Set(names || res.map((x) => x.tag));
     tset.forEach((nm) => {
-      delayHttp[nm] = { tag: nm, mode: "http", degraded: true, url: url, reachable: false, ms: null };
+      delayHttp[nm] = { tag: nm, mode: "http", degraded: true, url: url, reachable: false, ms: null, note: d.note };
     });
   }
 
@@ -1541,7 +1541,7 @@ async function runNodeTest(names, mode, url, opts) {
   const best = up.length ? Math.min.apply(null, up.map((r) => r.ms)) : null;
   const head = d.mode === "http"
     ? `实测 ${shortUrl(d.url || (tgt && tgt.url))}`
-    : (mode === "tcp" ? "TCP 握手" : "本机无 Docker，已降级为 TCP 握手");
+    : (mode === "tcp" ? "TCP 握手" : (d.note || "已降级为 TCP 握手"));
   toast(`${head}：可用 ${up.length}/${res.length}` + (best !== null ? `，最快 ${best}ms` : "")
     + (sorted ? (saved ? "，已按延迟重排" : "，排序未保存") : ""));
   return d;
@@ -3207,7 +3207,7 @@ const Dash = (function () {
         // 补测还在跑就先等它，免得两批结果前后脚回来互相覆盖
         if (autoProbe) await autoProbe.catch(() => {});
         const d = await runNodeTest(names, mode, mode === "http" ? probeUrl() : null, { sort: !only });
-        // 后端降级（没 Docker / 上一次还没跑完）时结果落在 TCP 列，别让人以为 URL 列坏了
+        // 后端降级（临时 sing-box 没起来 / 上一次还没跑完）时结果落在 TCP 列，别让人以为 URL 列坏了
         const downgraded = mode === "http" && d && d.mode !== "http";
         if (downgraded) {
           urlHint = (d.note || "URL 实测没跑成").replace(/[。；].*$/, "");
@@ -3259,8 +3259,8 @@ const Dash = (function () {
        两种失败分开处理：
        - 「上一次实测还在跑」这种排队冲突 → 3 秒后自己重试（最多两次），
          别让用户关掉弹窗重开才发现 URL 列空着；
-       - 环境不支持（没 Docker）→ 本次弹窗不再试，URL 列保持「—」，悬停能看到原因，
-         下次打开再试一次（不永久封死，Docker 修好了就能用）。 */
+       - 环境不支持（临时 sing-box 起不来）→ 本次弹窗不再试，URL 列保持「—」，悬停能看到原因，
+         下次打开再试一次（不永久封死，端口/资源恢复后就能用）。 */
     let autoTries = 0;
     let hintText = "", hintUntil = 0, hintTimer = 0;
 

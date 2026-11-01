@@ -151,7 +151,6 @@ def _run_probe(nodes: list[dict], url: str, timeout_ms: int) -> dict:
         port = BASE_PORT + idx
         inbounds.append({"type": "mixed", "tag": in_tag,
                          "listen": "127.0.0.1", "listen_port": port})
-        rules.append({"inbound": [in_tag], "outbound": tag})
         pairs.append((port, tag, name))
 
     if not pairs:
