@@ -19,12 +19,12 @@ mkdir -p "$STATE" "$TPL"
 echo "==> 安装 Unraid 容器模板"
 cp "$HERE/unraid/my-uproxy.xml" "$TPL/my-uproxy.xml" 2>/dev/null || true
 
-echo "==> 获取镜像（优先用 CI 构建的 ghcr 镜像；拉不到再本地 build）"
-IMAGE="ghcr.io/bcfxclub/unraid-uproxy:latest"
+echo "==> 获取镜像（直接使用 v2rayA 官方镜像，公开可匿名拉取）"
+IMAGE="ghcr.io/v2raya/v2raya:v2.5.10"
 if ! docker pull "$IMAGE" 2>/dev/null; then
-  echo "   ghcr 拉取失败，尝试本地 build（需能访问 ghcr.io 拉取 v2raya 基础镜像）..."
-  docker build -t uproxy:latest "$HERE"
-  IMAGE="uproxy:latest"
+  echo "   ghcr 拉取失败，尝试 Docker Hub 镜像 mzz2017/v2raya:v2.5.10 ..."
+  IMAGE="mzz2017/v2raya:v2.5.10"
+  docker pull "$IMAGE" 2>/dev/null || { echo "镜像拉取失败，请检查网络后重试"; exit 1; }
 fi
 
 echo "==> 启动容器"

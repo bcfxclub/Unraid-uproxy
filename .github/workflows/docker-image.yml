@@ -14,5 +14,12 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Log in to GHCR
+      # GitHub Actions 内拉取 ghcr.io 基础镜像需先登录，否则匿名 pull 公开包偶发失败
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     - name: Build the Docker image
       run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)

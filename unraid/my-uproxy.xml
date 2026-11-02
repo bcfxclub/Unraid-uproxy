@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Container version="2">
   <Name>Unraid-uproxy</Name>
-  <!-- 存储库：完整镜像地址。默认指向 GHCR 公开镜像 ghcr.io/bcfxclub/unraid-uproxy:latest
-       （随 GitHub tag 自动构建、包已设为 Public，Unraid「强制更新」即可匿名拉到新版本，无需令牌）。
-       本镜像基于 v2rayA v2.5.10（自带 xray 内核），代理引擎与 WebUI 由 v2rayA 提供。 -->
-  <Repository>ghcr.io/bcfxclub/unraid-uproxy:latest</Repository>
+  <!-- 存储库：直接使用 v2rayA 官方镜像 ghcr.io/v2raya/v2raya:v2.5.10
+       （自带 xray 内核，公开镜像，Unraid「强制更新」即可匿名拉取，无需令牌）。
+       代理引擎与 WebUI 由 v2rayA 提供，uproxy 仅做 Unraid 场景化部署模板与辅助。 -->
+  <Repository>ghcr.io/v2raya/v2raya:v2.5.10</Repository>
   <Registry></Registry>
   <Network>host</Network>
   <Restart>unless-stopped</Restart>
@@ -12,7 +12,7 @@
   <Shell>sh</Shell>
   <Privileged>true</Privileged>
   <Support>https://github.com/bcfxclub/Unraid-uproxy</Support>
-  <Overview>Unraid 出网加速（基于 v2rayA）。代理引擎与 WebUI 由 v2rayA 提供（自带 xray 内核），uproxy 仅做 Unraid 场景化部署。透明代理（iptables redirect）接管宿主机 + Docker 容器出网，覆盖 Docker 拉镜像 / CA 商店 / GitHub 更新加速等全部场景；并靠 v2rayA 的 DNS 防污染（DoH / 经代理转发）绕过节点服务器域名在大陆网络下解析不出的死结（此前 sing-box 方案可用数为 0 的根因）。WebUI 端口 2017，系统代理 HTTP 20171 / SOCKS 20170。首次访问设置管理员密码。</Overview>
+  <Overview>Unraid 出网加速（直接使用 v2rayA 官方镜像，自带 xray 内核）。代理引擎与 WebUI 由 v2rayA 提供，uproxy 仅做 Unraid 场景化部署模板与辅助脚本。透明代理（iptables redirect）接管宿主机 + Docker 容器出网，覆盖 Docker 拉镜像 / CA 商店 / GitHub 更新加速等全部场景；并靠 v2rayA 的 DNS 防污染（DoH / 经代理转发）绕过节点服务器域名在大陆网络下解析不出的死结（此前 sing-box 方案可用数为 0 的根因）。WebUI 端口 2017，系统代理 HTTP 20171 / SOCKS 20170。首次访问设置管理员密码。</Overview>
   <Category>Tools:Network</Category>
   <WebUI>http://[IP]:[PORT:2017]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/bcfxclub/Unraid-uproxy/main/unraid/my-uproxy.xml</TemplateURL>

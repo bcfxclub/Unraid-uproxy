@@ -3,8 +3,9 @@
 # 透明代理（iptables redirect）需要 host 网络 + privileged 才能操作宿主 iptables / netns。
 services:
   unraid-uproxy:
-    build: .
-    image: ghcr.io/bcfxclub/unraid-uproxy:latest
+    # 直接使用 v2rayA 官方镜像（自带 xray 内核），无需自行构建。
+    # 公开镜像，Unraid 机器匿名即可拉取。
+    image: ghcr.io/v2raya/v2raya:v2.5.10
     container_name: Unraid-uproxy
     restart: unless-stopped
     network_mode: host
