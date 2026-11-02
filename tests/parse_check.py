@@ -22,6 +22,9 @@ SAMPLES = [
     # SNI 错位场景：机场 SNI 是 txb011.xmrhmode.com，但服务器证书只认 ws-aicdn.com。
     # 没写 allowInsecure，默认必须放宽证书校验，否则节点全崩。
     "vmess://ewogICJ2IjogIjIiLAogICJwcyI6ICJTSU5f6L+35pWw5L2cIiwKICAiYWRkIjogInR4YjAxMS54bXJobW9kZS5jb20iLAogICJwb3J0IjogIjQ0MyIsCiAgImlkIjogImEiLAogICJzY3kiOiAidGNwIiwKICAidGxzIjogInRscyIKfQ==",
+    # 裸 trojan URI（无 security/sni 参数）：trojan 协议强制 TLS，此前因 _tls_obj
+    # 门槛被跳过，insecure 没加上 -> 证书域不匹配崩。修复后必须带 insecure tls 块。
+    "trojan://secretpass@km25.xmrhmode.com:41054#hk-bare-trojan",
 ]
 
 # 上面最后一行的 vmess base64 解码后是：
@@ -51,6 +54,15 @@ def main() -> int:
             fails.append(f"TLS 节点「{n['name']}」未默认放宽证书校验（insecure 缺失）")
     print(f"[TLS 默认 insecure] {len(tls_nodes)} 个 TLS 节点全部 insecure: "
           f"{all(n['outbound']['tls'].get('insecure') is True for n in tls_nodes)}")
+
+    # 回归：裸 trojan URI（无 security/sni 参数）也必须带 insecure 的 tls 块。
+    bare = [n for n in res["nodes"]
+            if n["type"] == "trojan"
+            and n["server"] == "km25.xmrhmode.com"
+            and (n["outbound"].get("tls") or {}).get("insecure") is True]
+    if not bare:
+        fails.append("裸 trojan URI 未带上含 insecure 的 tls 块（节点证书域不匹配会崩）")
+    print(f"[裸 trojan 强制 insecure] km25.xmrhmode.com 带 insecure tls: {bool(bare)}")
     return _finish(fails)
 
 

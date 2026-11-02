@@ -296,6 +296,16 @@ def _vless_trojan(scheme: str, rest: str, name: str, query: dict) -> dict | None
         ob = {"type": "trojan", "tag": tag, "server": host, "server_port": port,
               "password": urllib.parse.unquote(cred)}
     tls = _tls_obj(query, host)
+    if not tls and scheme == "trojan":
+        # trojan 协议强制 TLS。机场常下发「裸」trojan URI（无 security/sni 参数，
+        # 因为 trojan 本就默认走 TLS），若这里不加 tls 块，_vless_trojan 会跳过，
+        # 于是 sing-box 用默认 TLS + 默认 SNI（=host=节点域名）去握手；而节点真实
+        # 证书是 ws-aicdn.com 这类 CDN 域，与 SNI 完全不匹配 ->
+        # 「tls: failed to verify certificate ... not <节点域名>」，整条节点崩、
+        # 出口起不来。强制补一个含 insecure 的 tls 块即可跳过证书域不匹配
+        # （Go 的 InsecureSkipVerify 会一并跳过主机名校验），v2rayN/Clash/v2rayA
+        # 正是这么做的，所以它们能连上而本工具之前连不上。
+        tls = {"enabled": True, "server_name": host, "insecure": True}
     if tls:
         ob["tls"] = tls
     tr = _transport(query)

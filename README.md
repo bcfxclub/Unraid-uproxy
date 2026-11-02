@@ -1,9 +1,9 @@
 # uproxy · Unraid 出网加速编排工具
 
-> ⚠️ **项目状态：未完成 · 暂不可用**
+> ⚠️ **项目状态：根因已定位并修复，待实机验证**
 >
-> 当前版本（v1.0.19）代码可正常启动并监听端口，但**所依赖的机场订阅节点数据在大陆网络环境下无法正常出网**——CDN 域名解析不出（`lookup ...: empty result (cached)`）且 TLS 证书域名完全不匹配（`certificate is valid for ws-aicdn.com, not ...xmrhmode.com`）。这会导致 sing-box 出口起不来、或起来后连接级崩溃。
-> 这是上游数据源（机场下发）的问题，**并非代码缺陷，也无法在代码层面修复**。在更换可用的订阅源、或机场修正其 SNI / 证书数据之前，本项目**暂不建议用于生产环境**。
+> 之前报的「出口起不来 / `tls: failed to verify certificate ... not <节点域名>`」经排查是**代码 bug，并非机场数据不可救**：本工具解析 trojan 节点时漏加了 TLS 配置块——机场下发的裸 trojan URI 不带 `security`/`sni` 参数，被 `_tls_obj` 的门槛直接跳过，导致 `insecure` 没生效；sing-box 用默认 SNI（=节点域名 `xmrhnode.com`/`xmrhmode.com`）握手时与 CDN 证书域（`ws-aicdn.com`）不匹配而崩。v1.0.20 已让 trojan 节点**强制带 `insecure` 的 TLS 块**（其他客户端 v2rayN/Clash/v2rayA 正是这么做，所以它们能连上而本工具之前连不上）。
+> 代码已在 **v1.0.20** 修复并发布，但**尚未在真实大陆网络环境实机验证**（维护环境无 sing-box 二进制，仅通过单元回归测试）。请拉取 v1.0.20 重建容器、重拉订阅后实测；若个别节点仍连不上，多半是 DNS 解析不出（empty result）等剩余问题，届时可再评估引入 v2rayA 作底层引擎。
 
 解决 Unraid 上 Docker 拉镜像慢/超时、CA 应用商店打不开、插件从 GitHub 更新失败的问题。
 
