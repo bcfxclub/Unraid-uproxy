@@ -1,63 +1,23 @@
-FROM python:3.12-slim
+# uproxy · 基于 v2rayA 的 Unraid 出网加速
+# 代理引擎与 WebUI 完全由 v2rayA 提供（自带 xray 内核），uproxy 不再维护独立引擎。
+# uproxy 仅做 Unraid 场景化部署与辅助（脚本 + 容器模板 + 文档）。
+#
+# 基础镜像锁定 v2rayA v2.5.10（官方 ghcr.io/v2raya/v2raya），避免 latest 漂移。
+# v2rayA 镜像自带 v2raya_core（Xray 系），默认监听 0.0.0.0:2017。
+FROM ghcr.io/v2raya/v2raya:v2.5.10
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    UPX_HOST_ROOT=/host \
-    UPX_STATE_DIR=/config \
-    UPX_USER="" \
-    UPX_PASSWORD=""
+ENV V2RAYA_ADDRESS=0.0.0.0:2017 \
+    V2RAYA_NFTABLES_SUPPORT=off \
+    TZ=Asia/Shanghai
 
-ENV PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# Unraid 场景化辅助脚本：可在宿主 Unraid 终端执行，或容器内 /usr/local/bin 下可用。
+COPY fix-mirror.sh /usr/local/bin/fix-mirror.sh
+COPY unraid/my-uproxy.xml /opt/uproxy/my-uproxy.xml
+RUN chmod +x /usr/local/bin/fix-mirror.sh
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl \
-        ca-certificates \
-        docker.io \
-        iputils-ping \
-        tar \
-    && rm -rf /var/lib/apt/lists/*
+# v2rayA 配置持久化目录（运行时由宿主机卷挂载 /etc/v2raya）
+VOLUME ["/etc/v2raya"]
 
-# docker 命令行：仅用于 Unraid 6.x 老系统的「下发后重启 dockerd」路径（让 daemon.json
-# 生效）。出口本身（sing-box / WARP）已在进程内运行，不再依赖它——所以这里缺 CLI
-# 也只是 6.x 重启 dockerd 不可用，不再影响代理出口。
-# 先按官方静态二进制装；装不上再回退 apt；最后强制自检，缺 CLI 就让构建直接失败，
-# 绝不推一个「看起来成功、实际残次」的镜像。
-ARG DOCKER_CLI_VERSION=27.5.1
-RUN set -eux; \
-    if ! command -v docker >/dev/null 2>&1; then \
-        curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz" -o /tmp/docker.tgz && \
-        tar -xzf /tmp/docker.tgz -C /tmp && \
-        install -m 0755 /tmp/docker/docker /usr/local/bin/docker && \
-        rm -rf /tmp/docker /tmp/docker.tgz; \
-    fi; \
-    command -v docker; \
-    docker --version
+EXPOSE 2017 20170 20171 20172
 
-# sing-box 二进制：uproxy 用它在本容器内**直接作为进程**跑出口（不再 docker-in-docker）。
-# 锁 1.12.x：1.12.0 起配置必须显式声明 route.default_domain_resolver，否则启动 FATAL；
-# 代码已按版本自适应生成（1.12+ 用新 DNS 写法 + default_domain_resolver，旧版回退）。
-# 1.12.x 同时具备 action:reject（分流规则）、wireguard outbound（WARP）、mixed 入站（HTTP+SOCKS）。
-ARG SING_BOX_VERSION=1.12.7
-RUN set -eux; \
-    arch=$(uname -m); \
-    case "$arch" in \
-        x86_64) sb_arch=amd64 ;; \
-        aarch64) sb_arch=arm64 ;; \
-        armv7l) sb_arch=armv7 ;; \
-        *) sb_arch=amd64 ;; \
-    esac; \
-    curl -fsSL "https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/sing-box-${SING_BOX_VERSION}-linux-${sb_arch}.tar.gz" -o /tmp/sb.tgz \
-    && tar -xzf /tmp/sb.tgz -C /tmp \
-    && install -m 0755 /tmp/sing-box-*/sing-box /usr/local/bin/sing-box \
-    && rm -rf /tmp/sing-box-* /tmp/sb.tgz; \
-    sing-box version
-
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY app ./app
-COPY web ./web
-
-EXPOSE 8765
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8765"]
+# 沿用 v2rayA 官方镜像自带入口（启动 v2rayA 服务，监听 V2RAYA_ADDRESS）

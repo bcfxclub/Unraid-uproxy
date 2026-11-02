@@ -1,111 +1,55 @@
 #!/bin/bash
-# uproxy 一键部署（在 Unraid 终端执行，不依赖 docker compose 插件）
+# uproxy（基于 v2rayA 的 Unraid 出网加速）一键部署
+#
+# 代理引擎与 WebUI 由 v2rayA 提供（自带 xray 内核），uproxy 仅做 Unraid 场景化部署。
+# 透明代理（iptables redirect）接管宿主机 + Docker 容器出网，覆盖 Docker 拉镜像 /
+# CA 商店 / GitHub 更新加速等全部场景，并靠 v2rayA 的 DNS 防污染（DoH / 经代理转发）
+# 绕过节点服务器域名在大陆网络下解析不出的死结（此前 sing-box 方案可用数为 0 的根因）。
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE="${UPX_BASE:-/mnt/user/appdata/uproxy}"
-SRC="$BASE/src"
 STATE="$BASE/state"
 TPL=/boot/config/plugins/dockerMan/templates-user
-PORT="${UPX_WEB_PORT:-8765}"
+PORT="${UPX_WEB_PORT:-2017}"
 
 echo "==> 准备目录"
-mkdir -p "$SRC" "$STATE" "$TPL"
-
-echo "==> 清理并拷贝源码（先清空再拷贝，确保干净重建、移除已删除的旧文件）"
-rm -rf "$SRC"
-mkdir -p "$SRC"
-cp -r "$HERE"/app "$HERE"/web "$HERE"/Dockerfile "$HERE"/requirements.txt "$SRC"/
-cp "$HERE"/fix-mirror.sh "$SRC"/ 2>/dev/null || true
-cp "$HERE"/docker-compose.yml "$SRC"/ 2>/dev/null || true
+mkdir -p "$STATE" "$TPL"
 
 echo "==> 安装 Unraid 容器模板"
-if [ -f "$HERE/unraid/my-uproxy.xml" ]; then
-  cp "$HERE/unraid/my-uproxy.xml" "$TPL/my-uproxy.xml"
-fi
+cp "$HERE/unraid/my-uproxy.xml" "$TPL/my-uproxy.xml" 2>/dev/null || true
 
-echo "==> 构建镜像"
-# 基础镜像拉不动是本脚本最常见的失败点：daemon.json 里的 registry-mirror 已失效，
-# 表现为 lookup <域名>: no such host。给出明确指引，别让用户对着 docker 报错猜。
-if ! docker build -t uproxy:latest "$SRC"; then
-  echo
-  echo "!! 构建失败。"
-  echo "   最常见原因：daemon.json 里配的镜像源域名已失效，基础镜像拉不下来。"
-  echo "   （报错形如 lookup xxx on 223.5.5.5:53: no such host）"
-  echo
-  echo "   修一下镜像源再重跑："
-  echo "     bash $(dirname "$0")/fix-mirror.sh"
-  echo "     ./install.sh"
-  echo
-  echo "   若一条公共镜像源都不通，改用代理出口：给 dockerd 配 http_proxy 后重试。"
-  exit 1
+echo "==> 获取镜像（优先用 CI 构建的 ghcr 镜像；拉不到再本地 build）"
+IMAGE="ghcr.io/bcfxclub/unraid-uproxy:latest"
+if ! docker pull "$IMAGE" 2>/dev/null; then
+  echo "   ghcr 拉取失败，尝试本地 build（需能访问 ghcr.io 拉取 v2raya 基础镜像）..."
+  docker build -t uproxy:latest "$HERE"
+  IMAGE="uproxy:latest"
 fi
-
-echo "==> 处理登录密码"
-PW_FILE="$STATE/.deploy_pw"   # 部署时生成的密码备份，便于重部署保持一致
-if [ -n "${UPX_PASSWORD:-}" ]; then
-  : # 显式指定，优先使用
-elif [ -n "${UPX_TOKEN:-}" ]; then
-  UPX_PASSWORD="$UPX_TOKEN"
-  echo "    沿用已设置的 UPX_TOKEN 作为密码"
-elif [ -f "$STATE/auth.json" ]; then
-  # 已在界面改过密码：auth.json 优先级最高，env 传空也不影响，跳过生成避免误导
-  echo "    检测到已设置的密码（auth.json），重部署沿用，不重新生成"
-  UPX_PASSWORD=""
-elif [ -f "$PW_FILE" ]; then
-  UPX_PASSWORD="$(cat "$PW_FILE")"
-  echo "    沿用上次部署生成的密码（重部署保持一致）"
-else
-  UPX_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 24)"
-  echo "    已自动生成密码： $UPX_PASSWORD"
-  echo "    （请记下来，首次登录需要用到）"
-fi
-# 备份本次实际使用的密码（仅当为非空明文时），供下次重部署复用，避免密码被重置
-if [ -n "$UPX_PASSWORD" ]; then
-  printf '%s' "$UPX_PASSWORD" > "$PW_FILE"
-  chmod 600 "$PW_FILE"
-fi
-# 同时把密码作为旧式直连口令下发，老书签 ?token= 仍能继续使用。
-UPX_TOKEN="$UPX_PASSWORD"
 
 echo "==> 启动容器"
-docker rm -f uproxy >/dev/null 2>&1 || true
+docker rm -f Unraid-uproxy >/dev/null 2>&1 || true
 
-# Unraid 环境优先用官方模板引擎（run-template）创建容器：
-# 这样 Docker 页面会自动带上可点击的「WebUI」按钮（http://[IP]:[PORT:8765]/，
-# 其中 [IP]/[PORT] 由 Unraid 自动替换），无需手动输入地址。
 RUN_TPL=/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/run-template
 OK=0
 if [ -x "$RUN_TPL" ] && [ -f "$TPL/my-uproxy.xml" ]; then
-  if [ -n "$UPX_TOKEN" ]; then
-    # 把本次密码注入临时模板（不污染干净模板）；run-template 会把它作为 UPX_TOKEN 下发
-    TMPTPL="$(mktemp /tmp/uproxy-tpl.XXXXXX.xml)"
-    sed "s|\(Name=\"访问口令\" Target=\"UPX_TOKEN\"[^>]*>\)</Config>|\1$UPX_TOKEN</Config>|" \
-        "$TPL/my-uproxy.xml" > "$TMPTPL"
-    "$RUN_TPL" "$TMPTPL" && OK=1
-    rm -f "$TMPTPL"
-  else
-    # 密码留空：由已在界面设置的 auth.json 决定，干净模板即可
-    "$RUN_TPL" "$TPL/my-uproxy.xml" && OK=1
+  if "$RUN_TPL" "$TPL/my-uproxy.xml"; then
+    OK=1
   fi
 fi
 if [ "$OK" != "1" ]; then
   echo "    未检测到 Unraid 模板引擎或模板创建失败，退回直接 docker run"
-  docker rm -f Unraid-uproxy >/dev/null 2>&1 || true
   docker run -d \
     --name Unraid-uproxy \
     --restart unless-stopped \
-    -p "${PORT}:8765" \
-    -p 7890:7890 \
-    -p 9091:9091 \
-    --cap-add NET_ADMIN \
-    --device /dev/net/tun:/dev/net/tun \
-    -e "UPX_HOST_ROOT=/host" \
-    -e "UPX_STATE_DIR=/config" \
+    --network host \
+    --privileged \
+    -e "V2RAYA_ADDRESS=0.0.0.0:2017" \
+    -e "V2RAYA_NFTABLES_SUPPORT=off" \
     -e "TZ=Asia/Shanghai" \
-    -e "UPX_USER=admin" \
-    -e "UPX_PASSWORD=${UPX_PASSWORD}" \
-    -e "UPX_SESSION_TTL=604800" \
+    -v /lib/modules:/lib/modules:ro \
+    -v /etc/resolv.conf:/etc/resolv.conf \
+    -v /etc/v2raya:/etc/v2raya \
     -v /boot/config:/host/boot/config \
     -v /etc/docker:/host/etc/docker \
     -v /usr/local/etc/rc.d:/host/usr/local/etc/rc.d \
@@ -114,21 +58,21 @@ if [ "$OK" != "1" ]; then
     -v /etc/unraid-version:/host/etc/unraid-version:ro \
     -v /etc/os-release:/host/etc/os-release:ro \
     -v "${STATE}:/config" \
-    ghcr.io/bcfxclub/unraid-uproxy:latest
+    "$IMAGE"
 fi
 
 echo
 echo "==> 完成"
 IP="$(hostname -i 2>/dev/null | awk '{print $1}')"
-echo "    在浏览器打开："
-echo "      http://${IP}:${PORT}/"
-echo "    用户名： admin"
-echo "    密码：   ${UPX_PASSWORD}"
-echo "    （登录一次后浏览器会自动记住，无需再次输入）"
+echo "    浏览器打开： http://${IP}:2017/"
+echo "    （v2rayA 首次访问会让你设置管理员密码；第一个注册的人即为管理员）"
+echo "    在 Unraid 的 Docker 页面，Unraid-uproxy 卡片上会出现「WebUI」按钮，直接点击即可访问。"
 echo
-echo "    在 Unraid 的 Docker 页面，uproxy 卡片上会出现「WebUI」按钮，直接点击即可访问"
-echo "    （按钮地址为 http://[IP]:[PORT:8765]/，由 Unraid 自动替换为本机 IP 与端口）。"
-echo "    若按钮未出现，请在 Docker 页面刷新，或重启一次 Docker 服务让 Unraid 加载模板。"
+echo "下一步（在 v2rayA WebUI 里）："
+echo "    1. 设置密码后，导入你的订阅 URL（『订阅』→『添加』→ 粘贴链接）"
+echo "    2. 设置 → 透明代理：开启，实现方式选 redirect，分流模式选「绕过大陆(Bypass CN)」"
+echo "    3. 设置 → 防止 DNS 污染：选 DoH 或 经代理转发（这是解决节点域名解析不出、可用数 0 的关键）"
+echo "    4. 选一个节点，点启动，宿主机 + Docker 容器出网即走代理"
 echo
-echo "下一步：先在 WebUI「下发」页点「生成变更预览」核对 diff，确认无误再点「应用变更」。"
-echo "rc.docker 的行格式随 Unraid 版本变化，首次使用请务必人工核对一次。"
+echo "    不想用透明代理时，可关掉它，改为把 Unraid 的 Docker/商店/GitHub 指向"
+echo "    v2rayA 系统代理端口 http://<IP>:20171（HTTP）或 socks5://<IP>:20170。"

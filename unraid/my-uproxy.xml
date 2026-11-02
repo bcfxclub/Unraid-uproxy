@@ -3,46 +3,39 @@
   <Name>Unraid-uproxy</Name>
   <!-- 存储库：完整镜像地址。默认指向 GHCR 公开镜像 ghcr.io/bcfxclub/unraid-uproxy:latest
        （随 GitHub tag 自动构建、包已设为 Public，Unraid「强制更新」即可匿名拉到新版本，无需令牌）。
-       备选：Docker Hub 镜像 bcfx/uproxy:latest（同样自动构建并发布，作兜底来源）。
-       注意：GHCR 包名必须全小写，仓库名 Unraid-uproxy 对应包名 unraid-uproxy。 -->
+       本镜像基于 v2rayA v2.5.10（自带 xray 内核），代理引擎与 WebUI 由 v2rayA 提供。 -->
   <Repository>ghcr.io/bcfxclub/unraid-uproxy:latest</Repository>
   <Registry></Registry>
-  <Network>bridge</Network>
+  <Network>host</Network>
   <Restart>unless-stopped</Restart>
   <MyIP/>
   <Shell>sh</Shell>
-  <Privileged>false</Privileged>
+  <Privileged>true</Privileged>
   <Support>https://github.com/bcfxclub/Unraid-uproxy</Support>
-  <Overview>Unraid 出网加速编排工具。sing-box / WARP 在本容器内作为进程直接运行，监听代理端口（7890=sing-box，9091=WARP，均为 mixed=HTTP+SOCKS 共用端口），
-并把端口发布到宿主。7890 端口既可被 Unraid 7.0+ 的「出站代理管理器」接管（设置 → 出站代理 → 填 http://[IP]:7890 让系统出网走代理），也可直接当作个人上网代理：把浏览器 / 手机 / 系统代理指向 http://[IP]:7890 即可上外网（默认全局代理，局域网仍直连）。
-6.x 系统可继续用本工具的「下发」把代理写入 dockerd / CA 商店 / wgetrc。自带备份、开机重放与一键还原。
-安全：挂载已收窄为最小权限——只挂 /boot/config 子目录、/etc 下具体文件（wgetrc 可写、版本文件只读），默认不再挂 docker.sock，大幅降低 Unraid 安全发现告警。</Overview>
+  <Overview>Unraid 出网加速（基于 v2rayA）。代理引擎与 WebUI 由 v2rayA 提供（自带 xray 内核），uproxy 仅做 Unraid 场景化部署。透明代理（iptables redirect）接管宿主机 + Docker 容器出网，覆盖 Docker 拉镜像 / CA 商店 / GitHub 更新加速等全部场景；并靠 v2rayA 的 DNS 防污染（DoH / 经代理转发）绕过节点服务器域名在大陆网络下解析不出的死结（此前 sing-box 方案可用数为 0 的根因）。WebUI 端口 2017，系统代理 HTTP 20171 / SOCKS 20170。首次访问设置管理员密码。</Overview>
   <Category>Tools:Network</Category>
-  <WebUI>http://[IP]:[PORT:8765]/</WebUI>
+  <WebUI>http://[IP]:[PORT:2017]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/bcfxclub/Unraid-uproxy/main/unraid/my-uproxy.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/bcfxclub/Unraid-uproxy/main/web/icon.png</Icon>
-  <ExtraParams>--cap-add NET_ADMIN --device /dev/net/tun</ExtraParams>
+  <ExtraParams></ExtraParams>
   <PostArgs/>
   <CPUset/>
   <DateInstalled/>
   <DonateText/>
   <DonateLink/>
   <Requires/>
-  <Config Name="WebUI 端口" Target="8765" Default="8765" Mode="tcp" Description="Web 管理界面端口" Type="Port" Display="always" Required="true" Mask="false">8765:8765</Config>
-  <Config Name="sing-box 代理端口" Target="7890" Default="7890" Mode="tcp" Description="订阅节点出口的 HTTP/SOCKS 代理端口（Unraid 7.0+ 出站代理管理器指向这里）" Type="Port" Display="always" Required="false" Mask="false">7890:7890</Config>
-  <Config Name="WARP 代理端口" Target="9091" Default="9091" Mode="tcp" Description="WARP 出口的 HTTP/SOCKS 代理端口" Type="Port" Display="always" Required="false" Mask="false">9091:9091</Config>
-  <Config Name="U盘配置 /boot/config" Target="/host/boot/config" Default="/boot/config" Mode="rw" Description="仅挂载 U 盘配置子目录（非整块 U 盘）：开机脚本 go 与 CA 商店 proxy.cfg。收窄挂载以降低 Unraid 安全告警" Type="Path" Display="always" Required="true" Mask="false">/boot/config</Config>
-  <Config Name="Docker 配置目录" Target="/host/etc/docker" Default="/etc/docker" Mode="rw" Description="读写 daemon.json（registry-mirrors）" Type="Path" Display="always" Required="true" Mask="false">/etc/docker</Config>
-  <Config Name="Docker 启动脚本目录" Target="/host/usr/local/etc/rc.d" Default="/usr/local/etc/rc.d" Mode="rw" Description="读写 rc.docker（dockerd 代理注入点）" Type="Path" Display="always" Required="true" Mask="false">/usr/local/etc/rc.d</Config>
+  <Config Name="WebUI 端口" Target="2017" Default="2017" Mode="tcp" Description="v2rayA Web 管理界面端口（host 网络下即宿主端口）" Type="Port" Display="always" Required="true" Mask="false">2017:2017</Config>
+  <Config Name="v2rayA 配置目录" Target="/etc/v2raya" Default="/etc/v2raya" Mode="rw" Description="v2rayA 配置（订阅/节点/规则）持久化目录" Type="Path" Display="always" Required="true" Mask="false">/etc/v2raya</Config>
+  <Config Name="内核模块" Target="/lib/modules" Default="/lib/modules" Mode="ro" Description="透明代理所需内核模块（iptables / tun）" Type="Path" Display="always" Required="true" Mask="false">/lib/modules</Config>
+  <Config Name="resolv.conf" Target="/etc/resolv.conf" Default="/etc/resolv.conf" Mode="rw" Description="接管系统 DNS 解析（v2rayA DNS 防污染）" Type="Path" Display="always" Required="true" Mask="false">/etc/resolv.conf</Config>
+  <Config Name="U盘配置 /boot/config" Target="/host/boot/config" Default="/boot/config" Mode="rw" Description="仅挂载 U 盘配置子目录（开机脚本 go 与 CA 商店 proxy.cfg）。收窄挂载以降低 Unraid 安全告警" Type="Path" Display="always" Required="true" Mask="false">/boot/config</Config>
+  <Config Name="Docker 配置目录" Target="/host/etc/docker" Default="/etc/docker" Mode="rw" Description="读写 daemon.json（可选：让 dockerd 单独走代理）" Type="Path" Display="always" Required="true" Mask="false">/etc/docker</Config>
+  <Config Name="Docker 启动脚本目录" Target="/host/usr/local/etc/rc.d" Default="/usr/local/etc/rc.d" Mode="rw" Description="读写 rc.docker" Type="Path" Display="always" Required="true" Mask="false">/usr/local/etc/rc.d</Config>
   <Config Name="系统 profile 目录" Target="/host/etc/profile.d" Default="/etc/profile.d" Mode="rw" Description="读写系统代理环境变量" Type="Path" Display="always" Required="true" Mask="false">/etc/profile.d</Config>
   <Config Name="系统 wget 配置（单文件）" Target="/host/etc/wgetrc" Default="/etc/wgetrc" Mode="rw" Description="写 /etc/wgetrc（装插件/下载 txz 走代理）。单文件挂载，不再挂整个 /etc 目录" Type="Path" Display="always" Required="true" Mask="false">/etc/wgetrc</Config>
-  <Config Name="Unraid 版本文件（只读）" Target="/host/etc/unraid-version" Default="/etc/unraid-version" Mode="ro" Description="只读读取，用于「系统信息」探测 Unraid 版本。单文件挂载，不暴露整个 /etc" Type="Path" Display="always" Required="true" Mask="false">/etc/unraid-version</Config>
-  <Config Name="系统信息文件（只读）" Target="/host/etc/os-release" Default="/etc/os-release" Mode="ro" Description="只读读取，作为 Unraid 版本探测的兜底来源" Type="Path" Display="advanced" Required="false" Mask="false">/etc/os-release</Config>
-  <Config Name="工具状态与备份" Target="/config" Default="/mnt/user/appdata/uproxy/state" Mode="rw" Description="配置、sing-box 配置与自动备份（务必放在阵列/缓存上以持久保存）" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/uproxy/state</Config>
-  <Config Name="Docker 套接字（可选）" Target="/var/run/docker.sock" Default="" Mode="" Description="可选：仅 Unraid 6.x 系统下发后需重启 dockerd 时才手动填回 /var/run/docker.sock。默认不挂载以降低安全风险；sing-box / WARP 出口已改进程内运行，不依赖它" Type="Device" Display="advanced" Required="false" Mask="false"></Config>
-  <Config Name="访问口令" Target="UPX_TOKEN" Default="" Mode="" Description="强烈建议设置：同网段任何人都能改你的 Docker 配置。留空表示不校验" Type="Variable" Display="always" Required="false" Mask="false"></Config>
-  <Config Name="宿主机根挂载点" Target="UPX_HOST_ROOT" Default="/host" Mode="" Description="容器内宿主机根目录前缀，一般不用改" Type="Variable" Display="advanced" Required="true" Mask="false">/host</Config>
+  <Config Name="Unraid 版本文件（只读）" Target="/host/etc/unraid-version" Default="/etc/unraid-version" Mode="ro" Description="只读读取，用于版本探测" Type="Path" Display="always" Required="true" Mask="false">/etc/unraid-version</Config>
+  <Config Name="系统信息文件（只读）" Target="/host/etc/os-release" Default="/etc/os-release" Mode="ro" Description="只读读取，作为版本探测兜底" Type="Path" Display="advanced" Required="false" Mask="false">/etc/os-release</Config>
+  <Config Name="工具状态与备份" Target="/config" Default="/mnt/user/appdata/uproxy/state" Mode="rw" Description="uproxy 辅助脚本状态目录（配置/备份），务必放在阵列/缓存上持久保存" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/uproxy/state</Config>
   <Config Name="时区" Target="TZ" Default="Asia/Shanghai" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">Asia/Shanghai</Config>
-  <Config Name="状态目录" Target="UPX_STATE_DIR" Default="/config" Mode="" Description="容器内配置与备份目录，对应挂载的 /config 卷" Type="Variable" Display="advanced" Required="true" Mask="false">/config</Config>
-  <Config Name="登录用户名" Target="UPX_USER" Default="admin" Mode="" Description="WebUI 登录用户名" Type="Variable" Display="advanced" Required="false" Mask="false">admin</Config>
+  <Config Name="关闭 nftables（用 iptables）" Target="V2RAYA_NFTABLES_SUPPORT" Default="off" Mode="" Description="Unraid 默认 iptables，设 off 避免 v2rayA 找不到 nftables table" Type="Variable" Display="advanced" Required="false" Mask="false">off</Config>
 </Container>

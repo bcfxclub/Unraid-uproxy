@@ -104,4 +104,5 @@ echo "==> 完成。验证一下："
 echo "    docker pull python:3.12-slim"
 echo
 echo "注意：/etc/docker/daemon.json 在内存中，重启 Unraid 后会丢失。"
-echo "      uproxy 装好后，在它的「下发」页勾选 mirror 目标并启用开机重放即可持久化。"
+echo "      uproxy（v2rayA 版）装好后，用 v2rayA WebUI 开启透明代理(redirect)即可让 Docker 拉镜像走代理，无需再依赖镜像源；"
+echo "      若只想让 dockerd 单独走代理，可把 v2rayA 系统代理端口(20171)注入 dockerd 环境变量。"

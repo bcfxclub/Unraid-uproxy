@@ -1,18 +1,15 @@
 #!/bin/bash
-# uproxy 一键更新：拉取最新代码并重新部署
+# uproxy 一键更新：拉取最新代码并重新部署（基于 v2rayA 的方案）
 #
 # 用法（在 Unraid 终端、本仓库目录下执行）：
 #   ./update.sh
 #
 # 做了什么：
-#   1. git pull --ff-only origin main  拉取最新代码（不会覆盖你的本地改动）
-#   2. ./install.sh                    覆盖源码 + 重建镜像 + 重启容器
+#   1. git pull --ff-only origin main  拉取最新代码
+#   2. ./install.sh                    重新构建/拉取镜像 + 重启容器
 #
-# 密码安全：install.sh 会自动沿用已有密码（界面改过的 auth.json，或首次部署时
-#           备份在 state/.deploy_pw 的密码），重部署不会把密码重置成新的。
-#
-# 可选：想让 Unraid 定时自动更新，可在「用户脚本(User Scripts)」里加一个
-#       每周/每天执行的脚本，内容就是上面两行（注意要用本仓库的绝对路径）。
+# 说明：代理引擎与 WebUI 由 v2rayA 提供，更新主要更新 uProxy 的部署脚本/模板/镜像层。
+#       v2rayA 自身的订阅与节点配置持久化在宿主 /etc/v2raya，更新容器不会丢失。
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,14 +21,14 @@ if ! git pull --ff-only origin main; then
   echo "!! git pull 失败。"
   echo "   可能原因："
   echo "     - 本地有未提交的改动（仓库目录应只放源码，配置都在 state 里，一般不会有）"
-  echo "     - Unraid 无法访问 GitHub（请确认外网通畅，或先让代理出口生效后再试）"
+  echo "     - Unraid 无法访问 GitHub（请确认外网通畅，或先让 v2rayA 代理出口生效后再试）"
   echo "   解决后可重新运行 ./update.sh"
   exit 1
 fi
 
 echo
-echo "==> 重新部署（install.sh 会保留密码并重建镜像）"
+echo "==> 重新部署（install.sh 会重建镜像并重启容器）"
 ./install.sh
 
 echo
-echo "==> 更新完成。刷新浏览器 http://<Unraid-IP>:8765/ 即可看到新版本。"
+echo "==> 更新完成。刷新浏览器 http://<Unraid-IP>:2017/ 即可看到新版本（v2rayA WebUI）。"
