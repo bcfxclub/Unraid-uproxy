@@ -21,7 +21,7 @@ services:
       - /lib/modules:/lib/modules:ro          # 内核模块（iptables / tun）
       - /etc/resolv.conf:/etc/resolv.conf     # 接管系统 DNS 解析
       - /etc/v2raya:/etc/v2raya               # v2rayA 配置持久化
-      # —— uproxy 原有宿主注入挂载（保留，供可选精细代理注入）——
+      # —— 宿主注入挂载（可选，仅 Unraid 精细代理注入需要；非 Unraid 可整段删除）——
       - /boot/config:/host/boot/config
       - /etc/docker:/host/etc/docker
       - /usr/local/etc/rc.d:/host/usr/local/etc/rc.d
@@ -29,4 +29,5 @@ services:
       - /etc/wgetrc:/host/etc/wgetrc
       - /etc/unraid-version:/host/etc/unraid-version:ro
       - /etc/os-release:/host/etc/os-release:ro
-      - /mnt/user/appdata/uproxy/state:/config
+      # 辅助工具状态目录（宿主机路径，自动创建；v2rayA 真正数据在上面的 /etc/v2raya）
+      - ./data:/config

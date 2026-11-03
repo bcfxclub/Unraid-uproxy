@@ -67,6 +67,27 @@ IP="$(hostname -i 2>/dev/null | awk '{print $1}')"
 echo "    浏览器打开： http://${IP}:2017/"
 echo "    （v2rayA 首次访问会让你设置管理员密码；第一个注册的人即为管理员）"
 echo "    在 Unraid 的 Docker 页面，Unraid-uproxy 卡片上会出现「WebUI」按钮，直接点击即可访问。"
+
+echo
+echo "==> 注册 Unraid 开机自启（阵列启动后自动把容器拉起）"
+if [ -w /boot/config/go ] 2>/dev/null; then
+  touch "/boot/config/plugins/uproxy-autostart.sh" 2>/dev/null || true
+  cat > "/boot/config/plugins/uproxy-autostart.sh" <<'AUTOSTART'
+#!/bin/sh
+# uproxy (v2rayA) autostart — 阵列启动后自动拉起容器
+if command -v docker >/dev/null 2>&1; then
+  sleep 30
+  docker start Unraid-uproxy >/dev/null 2>&1 || true
+fi
+AUTOSTART
+  chmod +x "/boot/config/plugins/uproxy-autostart.sh" 2>/dev/null || true
+  grep -q "uproxy-autostart.sh" /boot/config/go 2>/dev/null || \
+    echo '/boot/config/plugins/uproxy-autostart.sh &' >> /boot/config/go
+  echo "    已写入 /boot/config/go，阵列重启后自动启动 Unraid-uproxy 容器。"
+else
+  echo "    （未检测到 /boot/config/go，跳过开机自启；如需可手动 docker start Unraid-uproxy）"
+fi
+
 echo
 echo "下一步（在 v2rayA WebUI 里）："
 echo "    1. 设置密码后，导入你的订阅 URL（『订阅』→『添加』→ 粘贴链接）"
