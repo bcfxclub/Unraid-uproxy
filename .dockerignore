@@ -28,9 +28,10 @@ LICENSE
 install.sh
 uninstall.sh
 update.sh
-fix-mirror.sh
 docker-compose.yml
-unraid
+# 注意：unraid/my-uproxy.xml 与 fix-mirror.sh 是 Dockerfile COPY 到镜像里的辅助文件，
+# 必须保留在构建上下文（勿加入排除列表），否则 buildx 计算缓存键时报
+# "/unraid/my-uproxy.xml: not found" 而 CI 全挂。
 
 # 状态目录（含宿主机真实配置与密码，绝不入镜像）
 state
